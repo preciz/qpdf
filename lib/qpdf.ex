@@ -813,49 +813,35 @@ defmodule Qpdf do
     bits = Keyword.get(opts, :key_length, 256)
 
     pass_args =
-      []
-      |> then(fn acc -> if user_pass, do: acc ++ ["--user-password=#{user_pass}"], else: acc end)
-      |> then(fn acc ->
-        if owner_pass, do: acc ++ ["--owner-password=#{owner_pass}"], else: acc
-      end)
+      if(user_pass, do: ["--user-password=#{user_pass}"], else: []) ++
+        if owner_pass, do: ["--owner-password=#{owner_pass}"], else: []
 
     insecure_arg =
       if user_pass && !owner_pass, do: ["--allow-insecure"], else: []
 
     permission_args =
-      []
-      |> then(fn acc ->
+      [
         case Keyword.get(opts, :print) do
-          val when val in [:none, :low, :full] -> acc ++ ["--print=#{val}"]
-          _ -> acc
-        end
-      end)
-      |> then(fn acc ->
+          val when val in [:none, :low, :full] -> ["--print=#{val}"]
+          _ -> []
+        end,
         case Keyword.get(opts, :modify) do
-          val when val in [:none, :assembly, :form, :annotate, :all] -> acc ++ ["--modify=#{val}"]
-          _ -> acc
-        end
-      end)
-      |> then(fn acc ->
+          val when val in [:none, :assembly, :form, :annotate, :all] -> ["--modify=#{val}"]
+          _ -> []
+        end,
         case Keyword.get(opts, :extract) do
-          true -> acc ++ ["--extract=y"]
-          false -> acc ++ ["--extract=n"]
-          _ -> acc
-        end
-      end)
-      |> then(fn acc ->
+          true -> ["--extract=y"]
+          false -> ["--extract=n"]
+          _ -> []
+        end,
         case Keyword.get(opts, :annotate) do
-          true -> acc ++ ["--annotate=y"]
-          false -> acc ++ ["--annotate=n"]
-          _ -> acc
-        end
-      end)
-      |> then(fn acc ->
-        case Keyword.get(opts, :cleartext_metadata) do
-          true -> acc ++ ["--cleartext-metadata"]
-          _ -> acc
-        end
-      end)
+          true -> ["--annotate=y"]
+          false -> ["--annotate=n"]
+          _ -> []
+        end,
+        if(Keyword.get(opts, :cleartext_metadata), do: ["--cleartext-metadata"], else: [])
+      ]
+      |> List.flatten()
 
     ["--encrypt"] ++ pass_args ++ ["--bits=#{bits}"] ++ insecure_arg ++ permission_args
   end
@@ -930,18 +916,20 @@ defmodule Qpdf do
         {:ok, "-", :memory}
 
       {:file, path} when is_binary(path) ->
-        expanded = Path.expand(path)
-        File.mkdir_p!(Path.dirname(expanded))
-        {:ok, expanded, {:file, expanded}}
+        prepare_file_destination(path)
 
       path when is_binary(path) ->
-        expanded = Path.expand(path)
-        File.mkdir_p!(Path.dirname(expanded))
-        {:ok, expanded, {:file, expanded}}
+        prepare_file_destination(path)
 
       _other ->
         {:error, :invalid_destination}
     end
+  end
+
+  defp prepare_file_destination(path) do
+    expanded = Path.expand(path)
+    File.mkdir_p!(Path.dirname(expanded))
+    {:ok, expanded, {:file, expanded}}
   end
 
   defp do_split_pages(in_file, dir, pages_per_group, mode) do
@@ -999,63 +987,38 @@ defmodule Qpdf do
   end
 
   defp build_layer_args(opts) do
-    []
-    |> then(fn acc ->
+    [
       case Keyword.get(opts, :to) do
-        nil -> acc
-        to_spec -> acc ++ ["--to=#{format_page_spec(to_spec)}"]
-      end
-    end)
-    |> then(fn acc ->
+        nil -> []
+        to_spec -> ["--to=#{format_page_spec(to_spec)}"]
+      end,
       case Keyword.get(opts, :from) do
-        nil -> acc
-        from_spec -> acc ++ ["--from=#{format_page_spec(from_spec)}"]
-      end
-    end)
-    |> then(fn acc ->
+        nil -> []
+        from_spec -> ["--from=#{format_page_spec(from_spec)}"]
+      end,
       case Keyword.get(opts, :repeat) do
-        nil -> acc
-        true -> acc ++ ["--repeat=1-z"]
-        rep -> acc ++ ["--repeat=#{format_page_spec(rep)}"]
-      end
-    end)
-    |> then(fn acc ->
+        nil -> []
+        true -> ["--repeat=1-z"]
+        rep -> ["--repeat=#{format_page_spec(rep)}"]
+      end,
       case Keyword.get(opts, :password) do
-        nil -> acc
-        pass -> acc ++ ["--password=#{pass}"]
+        nil -> []
+        pass -> ["--password=#{pass}"]
       end
-    end)
+    ]
+    |> List.flatten()
   end
 
   defp build_attachment_args(key, filename, opts) do
-    ["--key=#{key}", "--filename=#{filename}"]
-    |> then(fn acc ->
-      case Keyword.get(opts, :mimetype) do
-        nil -> acc
-        mt -> acc ++ ["--mimetype=#{mt}"]
-      end
-    end)
-    |> then(fn acc ->
-      case Keyword.get(opts, :description) do
-        nil -> acc
-        desc -> acc ++ ["--description=#{desc}"]
-      end
-    end)
-    |> then(fn acc ->
-      case Keyword.get(opts, :creation_date) do
-        nil -> acc
-        cd -> acc ++ ["--creationdate=#{cd}"]
-      end
-    end)
-    |> then(fn acc ->
-      case Keyword.get(opts, :mod_date) do
-        nil -> acc
-        md -> acc ++ ["--moddate=#{md}"]
-      end
-    end)
-    |> then(fn acc ->
-      if Keyword.get(opts, :replace, false), do: acc ++ ["--replace"], else: acc
-    end)
+    [
+      ["--key=#{key}", "--filename=#{filename}"],
+      if(mt = Keyword.get(opts, :mimetype), do: ["--mimetype=#{mt}"], else: []),
+      if(desc = Keyword.get(opts, :description), do: ["--description=#{desc}"], else: []),
+      if(cd = Keyword.get(opts, :creation_date), do: ["--creationdate=#{cd}"], else: []),
+      if(md = Keyword.get(opts, :mod_date), do: ["--moddate=#{md}"], else: []),
+      if(Keyword.get(opts, :replace, false), do: ["--replace"], else: [])
+    ]
+    |> List.flatten()
   end
 
   defp resolve_input({:file, path}) when is_binary(path) do
