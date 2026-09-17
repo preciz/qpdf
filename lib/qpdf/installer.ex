@@ -166,9 +166,7 @@ defmodule Qpdf.Installer do
   @doc """
   Returns the base temporary directory.
   """
-  def tmp_dir do
-    Application.get_env(:qpdf, :tmp_dir) || System.tmp_dir!()
-  end
+  defdelegate tmp_dir, to: Qpdf.Temp
 
   defp download_and_extract_appimage(version, opts) do
     url =
@@ -183,25 +181,16 @@ defmodule Qpdf.Installer do
 
     ensure_network_apps_started!()
 
-    tmp_dir =
-      Path.join(
-        tmp_dir(),
-        "qpdf_installer_#{Base.encode16(:crypto.strong_rand_bytes(6))}"
-      )
+    Qpdf.Temp.with_tmp_dir([prefix: "qpdf_installer", sub_dir: false, bytes: 6], fn tmp_dir ->
+      appimage_file = Path.join(tmp_dir, "qpdf.AppImage")
 
-    File.mkdir_p!(tmp_dir)
-    appimage_file = Path.join(tmp_dir, "qpdf.AppImage")
-
-    try do
       with :ok <- fetch_file(url, appimage_file),
            :ok <- File.chmod(appimage_file, 0o755),
            :ok <- extract_appimage(appimage_file, tmp_dir),
            :ok <- deploy_extracted(tmp_dir, version) do
         {:ok, app_run_path(version)}
       end
-    after
-      File.rm_rf(tmp_dir)
-    end
+    end)
   end
 
   defp fetch_file(url, destination) do

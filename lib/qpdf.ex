@@ -21,6 +21,8 @@ defmodule Qpdf do
     "--decrypt"
   ]
 
+  alias Qpdf.Temp
+
   @type input :: binary() | {:file, Path.t()}
 
   @doc """
@@ -925,9 +927,7 @@ defmodule Qpdf do
       config :qpdf, tmp_dir: "/path/to/custom/tmp"
   """
   @spec tmp_dir() :: String.t()
-  def tmp_dir do
-    Application.get_env(:qpdf, :tmp_dir) || System.tmp_dir!()
-  end
+  defdelegate tmp_dir(), to: Temp
 
   defp format_page_spec(%Range{first: first, last: last, step: step}) when step in [1, -1] do
     "#{first}-#{last}"
@@ -1188,22 +1188,11 @@ defmodule Qpdf do
     dest_files =
       Enum.map(staged_files, fn staged_file ->
         dest_path = Path.join(dest_dir, Path.basename(staged_file))
-        move_file!(staged_file, dest_path)
+        Temp.move_file!(staged_file, dest_path)
         dest_path
       end)
 
     {:ok, dest_files}
-  end
-
-  defp move_file!(src, dest) do
-    case File.rename(src, dest) do
-      :ok ->
-        :ok
-
-      {:error, _reason} ->
-        File.cp!(src, dest)
-        File.rm!(src)
-    end
   end
 
   defp deliver_output(output, opts) do
@@ -1266,136 +1255,10 @@ defmodule Qpdf do
     |> List.flatten()
   end
 
-  defp resolve_input({:file, path}) when is_binary(path) do
-    expanded = Path.expand(path)
-    if File.regular?(expanded), do: {:ok, {:file, expanded}}, else: {:error, :enoent}
-  end
-
-  defp resolve_input(binary) when is_binary(binary), do: {:ok, {:binary, binary}}
-  defp resolve_input(_other), do: {:error, :invalid_input}
-
-  defp with_input_path(input, func) do
-    case resolve_input(input) do
-      {:ok, {:file, path}} ->
-        func.(path)
-
-      {:ok, {:binary, binary}} ->
-        with_tmp_dir(fn dir ->
-          in_file = Path.join(dir, "original.pdf")
-          File.write!(in_file, binary)
-          func.(in_file)
-        end)
-
-      {:error, _} = error ->
-        error
-    end
-  end
-
-  defp with_two_inputs(input1, input2, func, names) do
-    with {:ok, res1} <- resolve_input(input1),
-         {:ok, res2} <- resolve_input(input2) do
-      dispatch_two_inputs(res1, res2, func, names)
-    end
-  end
-
-  defp dispatch_two_inputs({:file, f1}, {:file, f2}, func, _names) do
-    func.(f1, f2)
-  end
-
-  defp dispatch_two_inputs(res1, res2, func, {name1, name2}) do
-    with_tmp_dir(fn dir ->
-      f1 = materialize_input(res1, dir, name1)
-      f2 = materialize_input(res2, dir, name2)
-      func.(f1, f2)
-    end)
-  end
-
-  defp materialize_input({:file, path}, _dir, _name), do: path
-
-  defp materialize_input({:binary, binary}, dir, name) do
-    path = Path.join(dir, name)
-    File.write!(path, binary)
-    path
-  end
-
-  defp with_merged_inputs(inputs, func) do
-    with {:ok, reversed} <- parse_merge_inputs(inputs) do
-      dispatch_merged_inputs(Enum.reverse(reversed), func)
-    end
-  end
-
-  defp parse_merge_inputs(inputs) do
-    Enum.reduce_while(inputs, {:ok, []}, fn item, {:ok, acc} ->
-      case parse_merge_item(item) do
-        {:ok, entry} -> {:cont, {:ok, [entry | acc]}}
-        {:error, _} = err -> {:halt, err}
-      end
-    end)
-  end
-
-  defp parse_merge_item({{type, path}, spec}) when type == :file and is_binary(path) do
-    case resolve_input({:file, path}) do
-      {:ok, resolved} -> {:ok, {resolved, spec}}
-      {:error, _} = err -> err
-    end
-  end
-
-  defp parse_merge_item({binary, spec}) when is_binary(binary) do
-    {:ok, {{:binary, binary}, spec}}
-  end
-
-  defp parse_merge_item(input) do
-    case resolve_input(input) do
-      {:ok, resolved} -> {:ok, {resolved, nil}}
-      {:error, _} = err -> err
-    end
-  end
-
-  defp dispatch_merged_inputs(items, func) do
-    if Enum.any?(items, fn {{type, _}, _} -> type == :binary end) do
-      with_tmp_dir(fn dir ->
-        func.(materialize_all_inputs(items, dir))
-      end)
-    else
-      func.(Enum.map(items, fn {{:file, path}, spec} -> {path, spec} end))
-    end
-  end
-
-  defp materialize_all_inputs(items, dir) do
-    items
-    |> Enum.with_index(1)
-    |> Enum.map(fn {{res, spec}, idx} ->
-      {materialize_input(res, dir, "input_#{idx}.pdf"), spec}
-    end)
-  end
-
-  defp with_input_and_output_dir(input, func) do
-    case resolve_input(input) do
-      {:ok, {:file, path}} ->
-        with_tmp_dir(fn dir ->
-          func.(path, dir)
-        end)
-
-      {:ok, {:binary, binary}} ->
-        with_tmp_dir(fn dir ->
-          in_file = Path.join(dir, "original.pdf")
-          File.write!(in_file, binary)
-          func.(in_file, dir)
-        end)
-
-      {:error, _} = error ->
-        error
-    end
-  end
-
-  defp with_tmp_dir(func) do
-    dir = Path.join(tmp_dir(), "qpdf/#{Base.encode16(:crypto.strong_rand_bytes(4))}")
-    File.mkdir_p!(dir)
-
-    try do
-      func.(dir)
-    after
-      File.rm_rf(dir)
-    end
-  end
+  defp resolve_input(input), do: Temp.resolve_input(input)
+  defp with_input_path(input, func), do: Temp.with_input_path(input, func)
+  defp with_two_inputs(i1, i2, func, names), do: Temp.with_two_inputs(i1, i2, func, names)
+  defp with_merged_inputs(inputs, func), do: Temp.with_merged_inputs(inputs, func)
+  defp with_input_and_output_dir(input, func), do: Temp.with_input_and_output_dir(input, func)
+  defp with_tmp_dir(func), do: Temp.with_tmp_dir(func)
 end
