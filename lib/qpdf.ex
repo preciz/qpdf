@@ -624,25 +624,7 @@ defmodule Qpdf do
     with_input_path(input, fn in_file ->
       case run_qpdf(["--no-warn", "--warning-exit-0", "--show-attachment=#{key}", in_file]) do
         {output, 0} ->
-          case Keyword.get(opts, :into, :memory) do
-            :memory ->
-              {:ok, output}
-
-            {:file, path} when is_binary(path) ->
-              expanded = Path.expand(path)
-              File.mkdir_p!(Path.dirname(expanded))
-              File.write!(expanded, output)
-              {:ok, expanded}
-
-            path when is_binary(path) ->
-              expanded = Path.expand(path)
-              File.mkdir_p!(Path.dirname(expanded))
-              File.write!(expanded, output)
-              {:ok, expanded}
-
-            _ ->
-              {:error, :invalid_destination}
-          end
+          deliver_output(output, opts)
 
         {output, _code} ->
           if String.contains?(output, "not found") do
@@ -684,40 +666,42 @@ defmodule Qpdf do
   @spec add_attachment(input(), input(), keyword()) ::
           {:ok, binary() | Path.t()} | {:error, any()}
   def add_attachment(input, attachment, opts \\ []) do
-    with_attachment_inputs(input, attachment, opts, fn in_file, att_file, key, filename ->
-      att_opts =
-        ["--key=#{key}", "--filename=#{filename}"]
-        |> then(fn acc ->
-          case Keyword.get(opts, :mimetype) do
-            nil -> acc
-            mt -> acc ++ ["--mimetype=#{mt}"]
-          end
-        end)
-        |> then(fn acc ->
-          case Keyword.get(opts, :description) do
-            nil -> acc
-            desc -> acc ++ ["--description=#{desc}"]
-          end
-        end)
-        |> then(fn acc ->
-          case Keyword.get(opts, :creation_date) do
-            nil -> acc
-            cd -> acc ++ ["--creationdate=#{cd}"]
-          end
-        end)
-        |> then(fn acc ->
-          case Keyword.get(opts, :mod_date) do
-            nil -> acc
-            md -> acc ++ ["--moddate=#{md}"]
-          end
-        end)
-        |> then(fn acc ->
-          if Keyword.get(opts, :replace, false), do: acc ++ ["--replace"], else: acc
-        end)
+    case resolve_input(attachment) do
+      {:ok, resolved_att} ->
+        key =
+          Keyword.get(opts, :key) ||
+            case resolved_att do
+              {:file, p} -> Path.basename(p)
+              {:binary, _} -> "attachment"
+            end
 
-      args = [in_file | @default_opts] ++ ["--add-attachment", att_file] ++ att_opts ++ ["--"]
-      run_qpdf_into(args, opts)
-    end)
+        filename =
+          Keyword.get(opts, :filename) ||
+            case resolved_att do
+              {:file, p} -> Path.basename(p)
+              {:binary, _} -> key
+            end
+
+        with_two_inputs(
+          input,
+          attachment,
+          fn in_file, att_file ->
+            att_opts = build_attachment_args(key, filename, opts)
+
+            args =
+              [in_file | @default_opts] ++ ["--add-attachment", att_file] ++ att_opts ++ ["--"]
+
+            run_qpdf_into(args, opts)
+          end,
+          {"document.pdf", filename}
+        )
+
+      {:error, :enoent} = err ->
+        err
+
+      {:error, :invalid_input} ->
+        {:error, :invalid_attachment}
+    end
   end
 
   @doc """
@@ -986,154 +970,108 @@ defmodule Qpdf do
     end
   end
 
-  defp apply_layer(input, type, layer_input, opts) do
-    with_layer_inputs(input, layer_input, fn doc_file, layer_file ->
-      flag = if type == :overlay, do: "--overlay", else: "--underlay"
+  defp deliver_output(output, opts) do
+    case resolve_output_target(opts) do
+      {:ok, "-", :memory} ->
+        {:ok, output}
 
-      layer_opts =
-        []
-        |> then(fn acc ->
-          case Keyword.get(opts, :to) do
-            nil -> acc
-            to_spec -> acc ++ ["--to=#{format_page_spec(to_spec)}"]
-          end
-        end)
-        |> then(fn acc ->
-          case Keyword.get(opts, :from) do
-            nil -> acc
-            from_spec -> acc ++ ["--from=#{format_page_spec(from_spec)}"]
-          end
-        end)
-        |> then(fn acc ->
-          case Keyword.get(opts, :repeat) do
-            nil -> acc
-            true -> acc ++ ["--repeat=1-z"]
-            rep -> acc ++ ["--repeat=#{format_page_spec(rep)}"]
-          end
-        end)
-        |> then(fn acc ->
-          case Keyword.get(opts, :password) do
-            nil -> acc
-            pass -> acc ++ ["--password=#{pass}"]
-          end
-        end)
+      {:ok, dest_path, {:file, dest_path}} ->
+        File.write!(dest_path, output)
+        {:ok, dest_path}
 
-      args =
-        [doc_file | @default_opts] ++
-          [flag, layer_file] ++ layer_opts ++ ["--"]
-
-      run_qpdf_into(args, opts)
-    end)
-  end
-
-  defp with_layer_inputs(input1, input2, func) do
-    with {:ok, resolved1} <- normalize_layer_input(input1),
-         {:ok, resolved2} <- normalize_layer_input(input2) do
-      case {resolved1, resolved2} do
-        {{:file, f1}, {:file, f2}} ->
-          func.(f1, f2)
-
-        _ ->
-          with_tmp_dir(fn dir ->
-            f1 =
-              case resolved1 do
-                {:file, path} ->
-                  path
-
-                {:binary, bin} ->
-                  p = Path.join(dir, "layer_doc.pdf")
-                  File.write!(p, bin)
-                  p
-              end
-
-            f2 =
-              case resolved2 do
-                {:file, path} ->
-                  path
-
-                {:binary, bin} ->
-                  p = Path.join(dir, "layer_stamp.pdf")
-                  File.write!(p, bin)
-                  p
-              end
-
-            func.(f1, f2)
-          end)
-      end
+      {:error, _} = error ->
+        error
     end
   end
 
-  defp normalize_layer_input({:file, path}) when is_binary(path) do
+  defp apply_layer(input, type, layer_input, opts) do
+    with_two_inputs(
+      input,
+      layer_input,
+      fn doc_file, layer_file ->
+        flag = if type == :overlay, do: "--overlay", else: "--underlay"
+        layer_opts = build_layer_args(opts)
+        args = [doc_file | @default_opts] ++ [flag, layer_file] ++ layer_opts ++ ["--"]
+        run_qpdf_into(args, opts)
+      end,
+      {"doc.pdf", "layer.pdf"}
+    )
+  end
+
+  defp build_layer_args(opts) do
+    []
+    |> then(fn acc ->
+      case Keyword.get(opts, :to) do
+        nil -> acc
+        to_spec -> acc ++ ["--to=#{format_page_spec(to_spec)}"]
+      end
+    end)
+    |> then(fn acc ->
+      case Keyword.get(opts, :from) do
+        nil -> acc
+        from_spec -> acc ++ ["--from=#{format_page_spec(from_spec)}"]
+      end
+    end)
+    |> then(fn acc ->
+      case Keyword.get(opts, :repeat) do
+        nil -> acc
+        true -> acc ++ ["--repeat=1-z"]
+        rep -> acc ++ ["--repeat=#{format_page_spec(rep)}"]
+      end
+    end)
+    |> then(fn acc ->
+      case Keyword.get(opts, :password) do
+        nil -> acc
+        pass -> acc ++ ["--password=#{pass}"]
+      end
+    end)
+  end
+
+  defp build_attachment_args(key, filename, opts) do
+    ["--key=#{key}", "--filename=#{filename}"]
+    |> then(fn acc ->
+      case Keyword.get(opts, :mimetype) do
+        nil -> acc
+        mt -> acc ++ ["--mimetype=#{mt}"]
+      end
+    end)
+    |> then(fn acc ->
+      case Keyword.get(opts, :description) do
+        nil -> acc
+        desc -> acc ++ ["--description=#{desc}"]
+      end
+    end)
+    |> then(fn acc ->
+      case Keyword.get(opts, :creation_date) do
+        nil -> acc
+        cd -> acc ++ ["--creationdate=#{cd}"]
+      end
+    end)
+    |> then(fn acc ->
+      case Keyword.get(opts, :mod_date) do
+        nil -> acc
+        md -> acc ++ ["--moddate=#{md}"]
+      end
+    end)
+    |> then(fn acc ->
+      if Keyword.get(opts, :replace, false), do: acc ++ ["--replace"], else: acc
+    end)
+  end
+
+  defp resolve_input({:file, path}) when is_binary(path) do
     expanded = Path.expand(path)
     if File.regular?(expanded), do: {:ok, {:file, expanded}}, else: {:error, :enoent}
   end
 
-  defp normalize_layer_input(binary) when is_binary(binary), do: {:ok, {:binary, binary}}
-  defp normalize_layer_input(_other), do: {:error, :invalid_input}
-
-  defp with_attachment_inputs(input, attachment, opts, func) do
-    with {:ok, resolved_input} <- normalize_layer_input(input),
-         {:ok, resolved_att, key, filename} <- normalize_attachment(attachment, opts) do
-      case {resolved_input, resolved_att} do
-        {{:file, f1}, {:file, f2}} ->
-          func.(f1, f2, key, filename)
-
-        _ ->
-          with_tmp_dir(fn dir ->
-            f1 =
-              case resolved_input do
-                {:file, path} ->
-                  path
-
-                {:binary, bin} ->
-                  p = Path.join(dir, "input_doc.pdf")
-                  File.write!(p, bin)
-                  p
-              end
-
-            f2 =
-              case resolved_att do
-                {:file, path} ->
-                  path
-
-                {:binary, bin} ->
-                  p = Path.join(dir, filename)
-                  File.write!(p, bin)
-                  p
-              end
-
-            func.(f1, f2, key, filename)
-          end)
-      end
-    end
-  end
-
-  defp normalize_attachment({:file, path}, opts) when is_binary(path) do
-    expanded = Path.expand(path)
-
-    if File.regular?(expanded) do
-      key = Keyword.get(opts, :key) || Path.basename(path)
-      filename = Keyword.get(opts, :filename) || Path.basename(path)
-      {:ok, {:file, expanded}, key, filename}
-    else
-      {:error, :enoent}
-    end
-  end
-
-  defp normalize_attachment(binary, opts) when is_binary(binary) do
-    key = Keyword.get(opts, :key, "attachment")
-    filename = Keyword.get(opts, :filename, key)
-    {:ok, {:binary, binary}, key, filename}
-  end
-
-  defp normalize_attachment(_other, _opts), do: {:error, :invalid_attachment}
+  defp resolve_input(binary) when is_binary(binary), do: {:ok, {:binary, binary}}
+  defp resolve_input(_other), do: {:error, :invalid_input}
 
   defp with_input_path(input, func) do
     case resolve_input(input) do
-      {:file, path} ->
+      {:ok, {:file, path}} ->
         func.(path)
 
-      {:binary, binary} ->
+      {:ok, {:binary, binary}} ->
         with_tmp_dir(fn dir ->
           in_file = Path.join(dir, "original.pdf")
           File.write!(in_file, binary)
@@ -1145,61 +1083,69 @@ defmodule Qpdf do
     end
   end
 
+  defp with_two_inputs(input1, input2, func, {name1, name2}) do
+    with {:ok, res1} <- resolve_input(input1),
+         {:ok, res2} <- resolve_input(input2) do
+      case {res1, res2} do
+        {{:file, f1}, {:file, f2}} ->
+          func.(f1, f2)
+
+        _ ->
+          with_tmp_dir(fn dir ->
+            f1 = materialize_input(res1, dir, name1)
+            f2 = materialize_input(res2, dir, name2)
+            func.(f1, f2)
+          end)
+      end
+    end
+  end
+
+  defp materialize_input({:file, path}, _dir, _name), do: path
+
+  defp materialize_input({:binary, binary}, dir, name) do
+    path = Path.join(dir, name)
+    File.write!(path, binary)
+    path
+  end
+
   defp with_merged_inputs(inputs, func) do
     parsed =
       Enum.reduce_while(inputs, {:ok, []}, fn
-        {{:file, path}, spec}, {:ok, acc} ->
-          expanded = Path.expand(path)
-
-          if File.regular?(expanded) do
-            {:cont, {:ok, [{:file, expanded, spec} | acc]}}
-          else
-            {:halt, {:error, :enoent}}
-          end
-
-        {:file, path}, {:ok, acc} ->
-          expanded = Path.expand(path)
-
-          if File.regular?(expanded) do
-            {:cont, {:ok, [{:file, expanded, nil} | acc]}}
-          else
-            {:halt, {:error, :enoent}}
+        {{:file, path}, spec}, {:ok, acc} when is_binary(path) ->
+          case resolve_input({:file, path}) do
+            {:ok, resolved} -> {:cont, {:ok, [{resolved, spec} | acc]}}
+            {:error, _} = err -> {:halt, err}
           end
 
         {binary, spec}, {:ok, acc} when is_binary(binary) ->
-          {:cont, {:ok, [{:binary, binary, spec} | acc]}}
+          {:cont, {:ok, [{{:binary, binary}, spec} | acc]}}
 
-        binary, {:ok, acc} when is_binary(binary) ->
-          {:cont, {:ok, [{:binary, binary, nil} | acc]}}
-
-        _other, _acc ->
-          {:halt, {:error, :invalid_input}}
+        input, {:ok, acc} ->
+          case resolve_input(input) do
+            {:ok, resolved} -> {:cont, {:ok, [{resolved, nil} | acc]}}
+            {:error, _} = err -> {:halt, err}
+          end
       end)
 
     case parsed do
       {:ok, reversed} ->
         items = Enum.reverse(reversed)
-        has_binary? = Enum.any?(items, fn {type, _, _} -> type == :binary end)
+        has_binary? = Enum.any?(items, fn {{type, _}, _} -> type == :binary end)
 
         if has_binary? do
           with_tmp_dir(fn dir ->
             file_specs =
               items
               |> Enum.with_index(1)
-              |> Enum.map(fn
-                {{:binary, bin, spec}, idx} ->
-                  file_path = Path.join(dir, "input_#{idx}.pdf")
-                  File.write!(file_path, bin)
-                  {file_path, spec}
-
-                {{:file, path, spec}, _idx} ->
-                  {path, spec}
+              |> Enum.map(fn {{res, spec}, idx} ->
+                path = materialize_input(res, dir, "input_#{idx}.pdf")
+                {path, spec}
               end)
 
             func.(file_specs)
           end)
         else
-          file_specs = Enum.map(items, fn {:file, path, spec} -> {path, spec} end)
+          file_specs = Enum.map(items, fn {{:file, path}, spec} -> {path, spec} end)
           func.(file_specs)
         end
 
@@ -1210,12 +1156,12 @@ defmodule Qpdf do
 
   defp with_input_and_output_dir(input, func) do
     case resolve_input(input) do
-      {:file, path} ->
+      {:ok, {:file, path}} ->
         with_tmp_dir(fn dir ->
           func.(path, dir)
         end)
 
-      {:binary, binary} ->
+      {:ok, {:binary, binary}} ->
         with_tmp_dir(fn dir ->
           in_file = Path.join(dir, "original.pdf")
           File.write!(in_file, binary)
@@ -1226,19 +1172,6 @@ defmodule Qpdf do
         error
     end
   end
-
-  defp resolve_input({:file, path}) when is_binary(path) do
-    expanded = Path.expand(path)
-
-    if File.regular?(expanded) do
-      {:file, expanded}
-    else
-      {:error, :enoent}
-    end
-  end
-
-  defp resolve_input(binary) when is_binary(binary), do: {:binary, binary}
-  defp resolve_input(_other), do: {:error, :invalid_input}
 
   defp with_tmp_dir(func) do
     dir = Path.join(tmp_dir(), "qpdf/#{Base.encode16(:crypto.strong_rand_bytes(4))}")
