@@ -45,15 +45,21 @@ mix qpdf.install
 ```
 
 Optional flags:
+- `mix qpdf.install --if-missing` — Installs only if the executable is not already installed.
 - `mix qpdf.install --version 12.3.1` — Installs a specific version.
 - `mix qpdf.install --force` — Overwrites an existing installation.
 
 ### Configuration
 
-You can configure the binary lookup behavior in your `config/config.exs`:
+You can configure the binary lookup behavior via environment variables or in your `config/config.exs`:
+
+```bash
+# Set custom binary location via environment variable (useful in Docker / CI)
+export QPDF_PATH="/usr/bin/qpdf"
+```
 
 ```elixir
-# Explicitly point to a system or custom binary
+# Or explicitly point to a system or custom binary in config
 config :qpdf, executable_path: "/usr/bin/qpdf"
 
 # Prefer a system-installed qpdf if available, falling back to auto-downloading the AppImage
@@ -200,6 +206,10 @@ false = Qpdf.encrypted?(pdf_file)
 # 14. Get vector of page sizes without loading page binaries into memory
 {:ok, sizes} = Qpdf.page_size_vector(pdf_file)
 IO.inspect(sizes) # e.g., [12345, 67890, ...]
+
+# 15. Check installed qpdf binary version
+{:ok, version} = Qpdf.bin_version()
+IO.puts("Running qpdf #{version}")
 ```
 
 ## Backward Compatibility
