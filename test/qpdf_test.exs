@@ -1044,6 +1044,17 @@ defmodule QpdfTest do
       assert owner_info.password_matched == :owner
     end
 
+    test "correctly parses owner-only encrypted PDF with empty user password", %{
+      pdf_binary: pdf_binary
+    } do
+      {:ok, enc} = Qpdf.encrypt(pdf_binary, owner_password: "admin_owner", key_length: 256)
+
+      assert {:ok, info} = Qpdf.encryption_info(enc)
+      assert info.encrypted == true
+      assert info.user_password == nil
+      assert info.password_matched == :user
+    end
+
     test "works with {:file, path}", %{pdf_binary: pdf_binary} do
       {:ok, enc} = Qpdf.encrypt(pdf_binary, user_password: "file_pw")
 

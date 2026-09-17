@@ -61,14 +61,14 @@ defmodule Qpdf.Encryption do
   defp build_encryption_map(output) do
     %{
       encrypted: true,
-      r: parse_int_regex(output, ~r/^R\s*=\s*(\d+)/m),
-      p: parse_int_regex(output, ~r/^P\s*=\s*(-?\d+)/m),
-      v: parse_int_regex(output, ~r/^V\s*=\s*(\d+)/m),
-      user_password: parse_string_regex(output, ~r/^User password\s*=\s*(.*)$/m),
+      r: parse_int_regex(output, ~r/^R[ \t]*=[ \t]*(\d+)/m),
+      p: parse_int_regex(output, ~r/^P[ \t]*=[ \t]*(-?\d+)/m),
+      v: parse_int_regex(output, ~r/^V[ \t]*=[ \t]*(\d+)/m),
+      user_password: parse_string_regex(output, ~r/^User password[ \t]*=[ \t]*(.*)$/m),
       password_matched: parse_password_matched(output),
-      stream_method: parse_string_regex(output, ~r/^stream encryption method:\s*(.*)$/m),
-      string_method: parse_string_regex(output, ~r/^string encryption method:\s*(.*)$/m),
-      file_method: parse_string_regex(output, ~r/^file encryption method:\s*(.*)$/m),
+      stream_method: parse_string_regex(output, ~r/^stream encryption method:[ \t]*(.*)$/m),
+      string_method: parse_string_regex(output, ~r/^string encryption method:[ \t]*(.*)$/m),
+      file_method: parse_string_regex(output, ~r/^file encryption method:[ \t]*(.*)$/m),
       permissions: parse_encryption_permissions(output)
     }
   end
