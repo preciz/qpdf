@@ -149,6 +149,53 @@ defmodule Qpdf do
   end
 
   @doc """
+  Overlays pages from another PDF on top of the input document.
+
+  Useful for applying stamps, watermarks, signatures, or foreground content.
+  Outputs the result directly to standard output without intermediate disk files.
+
+  ## Options
+    * `:to` - page specification on the destination document (e.g. `1..5`, `"even"`)
+    * `:from` - page specification on the overlay document
+    * `:repeat` - repeat overlay pages (e.g. `"1-z"` or `true` to repeat all pages)
+    * `:password` - password for the overlay document if encrypted
+
+  ## Examples
+
+      # Apply a 1-page watermark across all pages
+      {:ok, watermarked} = Qpdf.overlay(doc, watermark_pdf, repeat: true)
+
+      # Apply a stamp to page 1 only
+      {:ok, stamped} = Qpdf.overlay(doc, stamp_pdf, to: 1)
+  """
+  @spec overlay(input(), input(), keyword()) :: {:ok, binary()} | {:error, any()}
+  def overlay(input, overlay_input, opts \\ []) do
+    apply_layer(input, :overlay, overlay_input, opts)
+  end
+
+  @doc """
+  Underlays pages from another PDF behind the input document.
+
+  Useful for applying digital letterheads, backgrounds, or stationery.
+  Outputs the result directly to standard output without intermediate disk files.
+
+  ## Options
+    * `:to` - page specification on the destination document
+    * `:from` - page specification on the underlay document
+    * `:repeat` - repeat underlay pages (e.g. `"1-z"` or `true` to repeat all pages)
+    * `:password` - password for the underlay document if encrypted
+
+  ## Examples
+
+      # Apply a background letterhead across all pages
+      {:ok, with_letterhead} = Qpdf.underlay(doc, letterhead_pdf, repeat: true)
+  """
+  @spec underlay(input(), input(), keyword()) :: {:ok, binary()} | {:error, any()}
+  def underlay(input, underlay_input, opts \\ []) do
+    apply_layer(input, :underlay, underlay_input, opts)
+  end
+
+  @doc """
   Splits a PDF into pages or consecutive groups of pages.
 
   Defaults to splitting into individual single-page documents (`pages_per_group: 1`).
@@ -579,6 +626,94 @@ defmodule Qpdf do
   defp run_qpdf(args, opts \\ [stderr_to_stdout: true]) do
     System.cmd(qpdf_executable(), args, opts)
   end
+
+  defp apply_layer(input, type, layer_input, opts) do
+    with_layer_inputs(input, layer_input, fn doc_file, layer_file ->
+      flag = if type == :overlay, do: "--overlay", else: "--underlay"
+
+      layer_opts =
+        []
+        |> then(fn acc ->
+          case Keyword.get(opts, :to) do
+            nil -> acc
+            to_spec -> acc ++ ["--to=#{format_page_spec(to_spec)}"]
+          end
+        end)
+        |> then(fn acc ->
+          case Keyword.get(opts, :from) do
+            nil -> acc
+            from_spec -> acc ++ ["--from=#{format_page_spec(from_spec)}"]
+          end
+        end)
+        |> then(fn acc ->
+          case Keyword.get(opts, :repeat) do
+            nil -> acc
+            true -> acc ++ ["--repeat=1-z"]
+            rep -> acc ++ ["--repeat=#{format_page_spec(rep)}"]
+          end
+        end)
+        |> then(fn acc ->
+          case Keyword.get(opts, :password) do
+            nil -> acc
+            pass -> acc ++ ["--password=#{pass}"]
+          end
+        end)
+
+      args =
+        [doc_file | @default_opts] ++
+          [flag, layer_file] ++ layer_opts ++ ["--", "--", "-"]
+
+      case run_qpdf(args) do
+        {output, 0} -> {:ok, output}
+        other -> {:error, other}
+      end
+    end)
+  end
+
+  defp with_layer_inputs(input1, input2, func) do
+    with {:ok, resolved1} <- normalize_layer_input(input1),
+         {:ok, resolved2} <- normalize_layer_input(input2) do
+      case {resolved1, resolved2} do
+        {{:file, f1}, {:file, f2}} ->
+          func.(f1, f2)
+
+        _ ->
+          with_tmp_dir(fn dir ->
+            f1 =
+              case resolved1 do
+                {:file, path} ->
+                  path
+
+                {:binary, bin} ->
+                  p = Path.join(dir, "layer_doc.pdf")
+                  File.write!(p, bin)
+                  p
+              end
+
+            f2 =
+              case resolved2 do
+                {:file, path} ->
+                  path
+
+                {:binary, bin} ->
+                  p = Path.join(dir, "layer_stamp.pdf")
+                  File.write!(p, bin)
+                  p
+              end
+
+            func.(f1, f2)
+          end)
+      end
+    end
+  end
+
+  defp normalize_layer_input({:file, path}) when is_binary(path) do
+    expanded = Path.expand(path)
+    if File.regular?(expanded), do: {:ok, {:file, expanded}}, else: {:error, :enoent}
+  end
+
+  defp normalize_layer_input(binary) when is_binary(binary), do: {:ok, {:binary, binary}}
+  defp normalize_layer_input(_other), do: {:error, :invalid_input}
 
   defp with_input_path(input, func) do
     case resolve_input(input) do

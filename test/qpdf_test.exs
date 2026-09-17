@@ -134,6 +134,47 @@ defmodule QpdfTest do
     end
   end
 
+  describe "overlay/3 and underlay/3" do
+    test "overlays a page across all pages with repeat: true", %{pdf_binary: pdf_binary} do
+      {:ok, page1} = Qpdf.pages(pdf_binary, 1)
+      {:ok, overlaid} = Qpdf.overlay(pdf_binary, page1, repeat: true)
+      assert page_count!(overlaid) == 14
+      assert :ok = Qpdf.check(overlaid)
+    end
+
+    test "overlays on specific page only", %{pdf_binary: pdf_binary} do
+      {:ok, page1} = Qpdf.pages(pdf_binary, 1)
+      {:ok, overlaid} = Qpdf.overlay(pdf_binary, page1, to: 1, from: 1)
+      assert page_count!(overlaid) == 14
+      assert :ok = Qpdf.check(overlaid)
+    end
+
+    test "underlays with {:file, path}", %{pdf_file: pdf_file, pdf_binary: pdf_binary} do
+      {:ok, page1} = Qpdf.pages(pdf_binary, 1)
+      tmp_bg = Path.join(System.tmp_dir!(), "bg.pdf")
+      File.write!(tmp_bg, page1)
+
+      try do
+        {:ok, underlaid} = Qpdf.underlay({:file, pdf_file}, {:file, tmp_bg}, repeat: true)
+        assert page_count!(underlaid) == 14
+        assert :ok = Qpdf.check(underlaid)
+      after
+        File.rm(tmp_bg)
+      end
+    end
+
+    test "returns :enoent for non-existent file" do
+      assert {:error, :enoent} = Qpdf.overlay({:file, "/non/existent.pdf"}, "binary")
+      assert {:error, :enoent} = Qpdf.overlay("binary", {:file, "/non/existent.pdf"})
+      assert {:error, :enoent} = Qpdf.underlay({:file, "/non/existent.pdf"}, "binary")
+    end
+
+    test "returns :invalid_input for invalid input" do
+      assert {:error, :invalid_input} = Qpdf.overlay(12345, "binary")
+      assert {:error, :invalid_input} = Qpdf.underlay("binary", 12345)
+    end
+  end
+
   describe "split_pages/2" do
     test "splits into individual pages by default", %{pdf_binary: pdf_binary} do
       {:ok, pages} = Qpdf.split_pages(pdf_binary)
