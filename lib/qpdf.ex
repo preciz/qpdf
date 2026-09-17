@@ -15,13 +15,11 @@ defmodule Qpdf do
   loading the entire document into BEAM memory or writing redundant temporary copies.
   """
 
-  @default_opts [
-    "--no-warn",
-    "--warning-exit-0",
-    "--decrypt"
-  ]
-
+  alias Qpdf.CLI
+  alias Qpdf.Encryption
   alias Qpdf.Temp
+
+  @default_opts CLI.default_opts()
 
   @type input :: binary() | {:file, Path.t()}
 
@@ -482,7 +480,7 @@ defmodule Qpdf do
   @spec encrypt(input(), keyword()) :: {:ok, binary() | Path.t()} | {:error, any()}
   def encrypt(input, opts \\ []) do
     with_input_path(input, fn in_file ->
-      encrypt_args = build_encrypt_args(opts)
+      encrypt_args = Encryption.build_encrypt_args(opts)
       args = [in_file, "--no-warn", "--warning-exit-0"] ++ encrypt_args
       run_qpdf_into(args, opts)
     end)
@@ -604,7 +602,7 @@ defmodule Qpdf do
       args = ["--no-warn"] ++ pass_arg ++ ["--show-encryption", in_file]
 
       case run_qpdf(args) do
-        {output, 0} -> parse_encryption_info(output)
+        {output, 0} -> Encryption.parse_info(output)
         other -> {:error, other}
       end
     end)
@@ -915,9 +913,7 @@ defmodule Qpdf do
   Returns the path to the qpdf executable, downloading and installing it if necessary.
   """
   @spec executable_path() :: String.t()
-  def executable_path do
-    Qpdf.Installer.ensure_executable!()
-  end
+  defdelegate executable_path(), to: CLI, as: :executable
 
   @doc """
   Returns the base temporary directory used for PDF operations.
@@ -944,47 +940,6 @@ defmodule Qpdf do
   defp format_rotate_arg(angle, spec) do
     "--rotate=#{angle}:#{format_page_spec(spec)}"
   end
-
-  defp build_encrypt_args(opts) do
-    user_pass = Keyword.get(opts, :user_password)
-    owner_pass = Keyword.get(opts, :owner_password)
-    bits = Keyword.get(opts, :key_length, 256)
-
-    pass_args = build_pass_args(user_pass, owner_pass)
-    insecure_arg = if user_pass && !owner_pass, do: ["--allow-insecure"], else: []
-    permission_args = build_permission_args(opts)
-
-    ["--encrypt"] ++ pass_args ++ ["--bits=#{bits}"] ++ insecure_arg ++ permission_args
-  end
-
-  defp build_pass_args(user_pass, owner_pass) do
-    user_args = if user_pass, do: ["--user-password=#{user_pass}"], else: []
-    owner_args = if owner_pass, do: ["--owner-password=#{owner_pass}"], else: []
-    user_args ++ owner_args
-  end
-
-  defp build_permission_args(opts) do
-    [
-      print_perm_arg(Keyword.get(opts, :print)),
-      modify_perm_arg(Keyword.get(opts, :modify)),
-      flag_perm_arg("--extract", Keyword.get(opts, :extract)),
-      flag_perm_arg("--annotate", Keyword.get(opts, :annotate)),
-      if(Keyword.get(opts, :cleartext_metadata), do: ["--cleartext-metadata"], else: [])
-    ]
-    |> List.flatten()
-  end
-
-  defp print_perm_arg(val) when val in [:none, :low, :full], do: ["--print=#{val}"]
-  defp print_perm_arg(_), do: []
-
-  defp modify_perm_arg(val) when val in [:none, :assembly, :form, :annotate, :all],
-    do: ["--modify=#{val}"]
-
-  defp modify_perm_arg(_), do: []
-
-  defp flag_perm_arg(flag, true), do: ["#{flag}=y"]
-  defp flag_perm_arg(flag, false), do: ["#{flag}=n"]
-  defp flag_perm_arg(_flag, _), do: []
 
   defp build_optimize_args(opts) do
     stream_arg = stream_data_arg(Keyword.get(opts, :stream_data, :compress))
@@ -1036,69 +991,6 @@ defmodule Qpdf do
 
   defp min_dimension_arg(_flag, _), do: []
 
-  defp parse_encryption_info(output) do
-    if String.contains?(output, "File is not encrypted") do
-      {:ok, %{encrypted: false}}
-    else
-      {:ok, build_encryption_map(output)}
-    end
-  end
-
-  defp build_encryption_map(output) do
-    %{
-      encrypted: true,
-      r: parse_int_regex(output, ~r/^R\s*=\s*(\d+)/m),
-      p: parse_int_regex(output, ~r/^P\s*=\s*(-?\d+)/m),
-      v: parse_int_regex(output, ~r/^V\s*=\s*(\d+)/m),
-      user_password: parse_string_regex(output, ~r/^User password\s*=\s*(.*)$/m),
-      password_matched: parse_password_matched(output),
-      stream_method: parse_string_regex(output, ~r/^stream encryption method:\s*(.*)$/m),
-      string_method: parse_string_regex(output, ~r/^string encryption method:\s*(.*)$/m),
-      file_method: parse_string_regex(output, ~r/^file encryption method:\s*(.*)$/m),
-      permissions: parse_encryption_permissions(output)
-    }
-  end
-
-  defp parse_int_regex(text, regex) do
-    case Regex.run(regex, text) do
-      [_, val] -> String.to_integer(val)
-      _ -> nil
-    end
-  end
-
-  defp parse_string_regex(text, regex) do
-    case Regex.run(regex, text) do
-      [_, val] ->
-        trimmed = String.trim(val)
-        if trimmed == "", do: nil, else: trimmed
-
-      _ ->
-        nil
-    end
-  end
-
-  defp parse_password_matched(output) do
-    cond do
-      String.contains?(output, "Supplied password is user password") -> :user
-      String.contains?(output, "Supplied password is owner password") -> :owner
-      true -> nil
-    end
-  end
-
-  defp parse_encryption_permissions(output) do
-    %{
-      extract: String.contains?(output, "extract for any purpose: allowed"),
-      extract_accessibility: String.contains?(output, "extract for accessibility: allowed"),
-      print_low: String.contains?(output, "print low resolution: allowed"),
-      print_high: String.contains?(output, "print high resolution: allowed"),
-      modify_assembly: String.contains?(output, "modify document assembly: allowed"),
-      modify_forms: String.contains?(output, "modify forms: allowed"),
-      modify_annotations: String.contains?(output, "modify annotations: allowed"),
-      modify_other: String.contains?(output, "modify other: allowed"),
-      modify_anything: String.contains?(output, "modify anything: allowed")
-    }
-  end
-
   defp list_page_files(dir) do
     dir
     |> Path.join("page*.pdf")
@@ -1111,55 +1003,8 @@ defmodule Qpdf do
     end)
   end
 
-  defp qpdf_executable do
-    Qpdf.Installer.ensure_executable!()
-  end
-
-  defp run_qpdf(args, opts \\ [stderr_to_stdout: true]) do
-    System.cmd(qpdf_executable(), args, opts)
-  end
-
-  defp run_qpdf_into(args_before_out, opts) do
-    case resolve_output_target(opts) do
-      {:ok, out_target, target_type} ->
-        execute_qpdf_into(args_before_out ++ ["--", out_target], target_type)
-
-      {:error, _} = error ->
-        error
-    end
-  end
-
-  defp execute_qpdf_into(args, target_type) do
-    case run_qpdf(args) do
-      {output, 0} -> target_result(target_type, output)
-      other -> {:error, other}
-    end
-  end
-
-  defp target_result(:memory, output), do: {:ok, output}
-  defp target_result({:file, dest_path}, _output), do: {:ok, dest_path}
-
-  defp resolve_output_target(opts) do
-    case Keyword.get(opts, :into, :memory) do
-      :memory ->
-        {:ok, "-", :memory}
-
-      {:file, path} when is_binary(path) ->
-        prepare_file_destination(path)
-
-      path when is_binary(path) ->
-        prepare_file_destination(path)
-
-      _other ->
-        {:error, :invalid_destination}
-    end
-  end
-
-  defp prepare_file_destination(path) do
-    expanded = Path.expand(path)
-    File.mkdir_p!(Path.dirname(expanded))
-    {:ok, expanded, {:file, expanded}}
-  end
+  defp run_qpdf(args, opts \\ [stderr_to_stdout: true]), do: CLI.run(args, opts)
+  defp run_qpdf_into(args, opts), do: CLI.run_into(args, opts)
 
   defp do_split_pages(in_file, dest_dir, pages_per_group, mode) do
     with_tmp_dir(fn staging_dir ->
@@ -1195,19 +1040,7 @@ defmodule Qpdf do
     {:ok, dest_files}
   end
 
-  defp deliver_output(output, opts) do
-    case resolve_output_target(opts) do
-      {:ok, "-", :memory} ->
-        {:ok, output}
-
-      {:ok, dest_path, {:file, dest_path}} ->
-        File.write!(dest_path, output)
-        {:ok, dest_path}
-
-      {:error, _} = error ->
-        error
-    end
-  end
+  defp deliver_output(output, opts), do: CLI.deliver_output(output, opts)
 
   defp apply_layer(input, type, layer_input, opts) do
     with_two_inputs(
