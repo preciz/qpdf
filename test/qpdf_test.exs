@@ -14,56 +14,122 @@ defmodule QpdfTest do
     %{pdf_binary: pdf_binary}
   end
 
-  describe "page/2" do
-    test "extracts a specific page from a PDF", %{pdf_binary: pdf_binary} do
-      {:ok, _page_binary} = Qpdf.page(pdf_binary, 1)
-      {:ok, _page_binary} = Qpdf.page(pdf_binary, 14)
+  describe "pages/2 and page/2" do
+    test "extracts a single page with integer", %{pdf_binary: pdf_binary} do
+      {:ok, page_binary} = Qpdf.pages(pdf_binary, 1)
+      assert page_count!(page_binary) == 1
+
+      {:ok, page14_binary} = Qpdf.page(pdf_binary, 14)
+      assert page_count!(page14_binary) == 1
+    end
+
+    test "extracts a page range with Range struct", %{pdf_binary: pdf_binary} do
+      {:ok, chunk} = Qpdf.pages(pdf_binary, 1..3)
+      assert page_count!(chunk) == 3
+    end
+
+    test "extracts pages with list", %{pdf_binary: pdf_binary} do
+      {:ok, chunk} = Qpdf.pages(pdf_binary, [1, 3, 5])
+      assert page_count!(chunk) == 3
+    end
+
+    test "extracts pages with qpdf string syntax", %{pdf_binary: pdf_binary} do
+      {:ok, chunk} = Qpdf.pages(pdf_binary, "1-3")
+      assert page_count!(chunk) == 3
     end
 
     test "returns an error for non-existent page", %{pdf_binary: pdf_binary} do
-      assert {:error, _} = Qpdf.page(pdf_binary, 15)
+      assert {:error, _} = Qpdf.pages(pdf_binary, 15)
     end
   end
 
-  describe "split/1" do
-    test "splits a PDF into individual pages", %{pdf_binary: pdf_binary} do
-      {:ok, pages} = Qpdf.split(pdf_binary)
-
+  describe "split_pages/2" do
+    test "splits into individual pages by default", %{pdf_binary: pdf_binary} do
+      {:ok, pages} = Qpdf.split_pages(pdf_binary)
       assert length(pages) == 14
+      assert Enum.all?(pages, fn p -> page_count!(p) == 1 end)
     end
 
-    test "returns an error for non-PDF input" do
-      assert {:error, _} = Qpdf.split("not a pdf")
-    end
-  end
-
-  describe "split_groups/2" do
-    test "splits a PDF into groups of at most N pages", %{pdf_binary: pdf_binary} do
-      {:ok, groups} = Qpdf.split_groups(pdf_binary, 5)
-
-      # 14 pages in groups of at most 5 → 5 + 5 + 4.
+    test "splits into groups of at most N pages", %{pdf_binary: pdf_binary} do
+      {:ok, groups} = Qpdf.split_pages(pdf_binary, 5)
       assert [5, 5, 4] == Enum.map(groups, &page_count!/1)
     end
 
-    test "returns the groups in page order", %{pdf_binary: pdf_binary} do
-      {:ok, groups} = Qpdf.split_groups(pdf_binary, 1)
-      {:ok, sizes} = Qpdf.page_size_vector(pdf_binary)
+    test "returns an error for non-PDF input" do
+      assert {:error, _} = Qpdf.split_pages("not a pdf", 5)
+    end
+  end
 
-      # Compared by size rather than by bytes: two qpdf runs over the same page
-      # produce files of identical length that differ in the document /ID.
-      assert length(groups) == 14
-      assert Enum.map(groups, &byte_size/1) == sizes
+  describe "split/1 and split_groups/2 (backward compatibility)" do
+    test "split/1 returns tagged tuples", %{pdf_binary: pdf_binary} do
+      {:ok, pages} = Qpdf.split(pdf_binary)
+      assert length(pages) == 14
+      assert {1, _page1} = List.first(pages)
+      assert {14, _page14} = List.last(pages)
     end
 
-    test "returns one group when the PDF is shorter than the group size", %{
-      pdf_binary: pdf_binary
-    } do
-      assert {:ok, [group]} = Qpdf.split_groups(pdf_binary, 100)
-      assert page_count!(group) == 14
+    test "split/1 returns error for non-PDF input" do
+      assert {:error, _} = Qpdf.split("not a pdf")
+    end
+
+    test "split_groups/2 delegates to split_pages/2", %{pdf_binary: pdf_binary} do
+      {:ok, groups} = Qpdf.split_groups(pdf_binary, 5)
+      assert [5, 5, 4] == Enum.map(groups, &page_count!/1)
+    end
+  end
+
+  describe "page_count/1 and show_npages/1" do
+    test "returns the page count without splitting the PDF", %{pdf_binary: pdf_binary} do
+      assert {:ok, 14} = Qpdf.page_count(pdf_binary)
+      assert {:ok, 14} = Qpdf.show_npages(pdf_binary)
     end
 
     test "returns an error for non-PDF input" do
-      assert {:error, _} = Qpdf.split_groups("not a pdf", 5)
+      assert {:error, _} = Qpdf.page_count("not a pdf")
+    end
+  end
+
+  describe "encrypted?/1" do
+    test "returns false for unencrypted PDF", %{pdf_binary: pdf_binary} do
+      assert Qpdf.encrypted?(pdf_binary) == false
+    end
+
+    test "returns true for encrypted PDF", %{pdf_binary: pdf_binary} do
+      dir =
+        Path.join(System.tmp_dir!(), "enc_test_#{Base.encode16(:crypto.strong_rand_bytes(4))}")
+
+      File.mkdir_p!(dir)
+      in_file = Path.join(dir, "in.pdf")
+      out_file = Path.join(dir, "out.pdf")
+      File.write!(in_file, pdf_binary)
+
+      try do
+        {_, 0} =
+          System.cmd(Qpdf.executable_path(), [
+            in_file,
+            "--encrypt",
+            "user",
+            "owner",
+            "256",
+            "--",
+            out_file
+          ])
+
+        enc_bin = File.read!(out_file)
+        assert Qpdf.encrypted?(enc_bin) == true
+      after
+        File.rm_rf(dir)
+      end
+    end
+  end
+
+  describe "check/1" do
+    test "returns :ok for valid PDF", %{pdf_binary: pdf_binary} do
+      assert :ok = Qpdf.check(pdf_binary)
+    end
+
+    test "returns error for corrupt or non-PDF input" do
+      assert {:error, _} = Qpdf.check("not a pdf")
     end
   end
 
@@ -78,16 +144,6 @@ defmodule QpdfTest do
 
     test "returns an error for non-PDF input" do
       assert {:error, _} = Qpdf.page_size_vector("not a pdf")
-    end
-  end
-
-  describe "page_count/1" do
-    test "returns the page count without splitting the PDF", %{pdf_binary: pdf_binary} do
-      assert {:ok, 14} = Qpdf.page_count(pdf_binary)
-    end
-
-    test "returns an error for non-PDF input" do
-      assert {:error, _} = Qpdf.page_count("not a pdf")
     end
   end
 
