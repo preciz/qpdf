@@ -11,7 +11,18 @@ defmodule QpdfTest do
       |> :zstd.decompress()
       |> IO.iodata_to_binary()
 
-    %{pdf_binary: pdf_binary}
+    tmp_dir =
+      Path.join(System.tmp_dir!(), "qpdf_test_#{Base.encode16(:crypto.strong_rand_bytes(4))}")
+
+    File.mkdir_p!(tmp_dir)
+    pdf_file = Path.join(tmp_dir, "sample.pdf")
+    File.write!(pdf_file, pdf_binary)
+
+    on_exit(fn ->
+      File.rm_rf(tmp_dir)
+    end)
+
+    %{pdf_binary: pdf_binary, pdf_file: pdf_file}
   end
 
   describe "pages/2 and page/2" do
@@ -41,6 +52,22 @@ defmodule QpdfTest do
     test "returns an error for non-existent page", %{pdf_binary: pdf_binary} do
       assert {:error, _} = Qpdf.pages(pdf_binary, 15)
     end
+
+    test "extracts pages with {:file, path}", %{pdf_file: pdf_file} do
+      {:ok, page_binary} = Qpdf.pages({:file, pdf_file}, 1)
+      assert page_count!(page_binary) == 1
+
+      {:ok, range_binary} = Qpdf.page({:file, pdf_file}, 1..3)
+      assert page_count!(range_binary) == 3
+    end
+
+    test "returns :enoent for non-existent file" do
+      assert {:error, :enoent} = Qpdf.pages({:file, "/non/existent/file.pdf"}, 1)
+    end
+
+    test "returns :invalid_input for invalid input type" do
+      assert {:error, :invalid_input} = Qpdf.pages(12345, 1)
+    end
   end
 
   describe "split_pages/2" do
@@ -55,14 +82,34 @@ defmodule QpdfTest do
       assert [5, 5, 4] == Enum.map(groups, &page_count!/1)
     end
 
+    test "splits with {:file, path}", %{pdf_file: pdf_file} do
+      {:ok, pages} = Qpdf.split_pages({:file, pdf_file})
+      assert length(pages) == 14
+      assert Enum.all?(pages, fn p -> page_count!(p) == 1 end)
+
+      {:ok, groups} = Qpdf.split_pages({:file, pdf_file}, 5)
+      assert [5, 5, 4] == Enum.map(groups, &page_count!/1)
+    end
+
     test "returns an error for non-PDF input" do
       assert {:error, _} = Qpdf.split_pages("not a pdf", 5)
+    end
+
+    test "returns :enoent for non-existent file" do
+      assert {:error, :enoent} = Qpdf.split_pages({:file, "/non/existent/file.pdf"})
     end
   end
 
   describe "split/1 and split_groups/2 (backward compatibility)" do
     test "split/1 returns tagged tuples", %{pdf_binary: pdf_binary} do
       {:ok, pages} = Qpdf.split(pdf_binary)
+      assert length(pages) == 14
+      assert {1, _page1} = List.first(pages)
+      assert {14, _page14} = List.last(pages)
+    end
+
+    test "split/1 with {:file, path}", %{pdf_file: pdf_file} do
+      {:ok, pages} = Qpdf.split({:file, pdf_file})
       assert length(pages) == 14
       assert {1, _page1} = List.first(pages)
       assert {14, _page14} = List.last(pages)
@@ -84,14 +131,28 @@ defmodule QpdfTest do
       assert {:ok, 14} = Qpdf.show_npages(pdf_binary)
     end
 
+    test "returns the page count with {:file, path}", %{pdf_file: pdf_file} do
+      assert {:ok, 14} = Qpdf.page_count({:file, pdf_file})
+      assert {:ok, 14} = Qpdf.show_npages({:file, pdf_file})
+    end
+
+    test "returns :enoent for non-existent file" do
+      assert {:error, :enoent} = Qpdf.page_count({:file, "/non/existent/file.pdf"})
+    end
+
     test "returns an error for non-PDF input" do
       assert {:error, _} = Qpdf.page_count("not a pdf")
     end
   end
 
   describe "encrypted?/1" do
-    test "returns false for unencrypted PDF", %{pdf_binary: pdf_binary} do
+    test "returns false for unencrypted PDF", %{pdf_binary: pdf_binary, pdf_file: pdf_file} do
       assert Qpdf.encrypted?(pdf_binary) == false
+      assert Qpdf.encrypted?({:file, pdf_file}) == false
+    end
+
+    test "returns :enoent for non-existent file" do
+      assert {:error, :enoent} = Qpdf.encrypted?({:file, "/non/existent/file.pdf"})
     end
 
     test "returns true for encrypted PDF", %{pdf_binary: pdf_binary} do
@@ -117,6 +178,7 @@ defmodule QpdfTest do
 
         enc_bin = File.read!(out_file)
         assert Qpdf.encrypted?(enc_bin) == true
+        assert Qpdf.encrypted?({:file, out_file}) == true
       after
         File.rm_rf(dir)
       end
@@ -124,8 +186,13 @@ defmodule QpdfTest do
   end
 
   describe "check/1" do
-    test "returns :ok for valid PDF", %{pdf_binary: pdf_binary} do
+    test "returns :ok for valid PDF", %{pdf_binary: pdf_binary, pdf_file: pdf_file} do
       assert :ok = Qpdf.check(pdf_binary)
+      assert :ok = Qpdf.check({:file, pdf_file})
+    end
+
+    test "returns :enoent for non-existent file" do
+      assert {:error, :enoent} = Qpdf.check({:file, "/non/existent/file.pdf"})
     end
 
     test "returns error for corrupt or non-PDF input" do
@@ -134,12 +201,19 @@ defmodule QpdfTest do
   end
 
   describe "page_size_vector/1" do
-    test "returns a vector of page sizes", %{pdf_binary: pdf_binary} do
+    test "returns a vector of page sizes", %{pdf_binary: pdf_binary, pdf_file: pdf_file} do
       {:ok, sizes} = Qpdf.page_size_vector(pdf_binary)
 
       assert length(sizes) == 14
       assert Enum.all?(sizes, &is_integer/1)
       assert Enum.all?(sizes, &(&1 > 0))
+
+      {:ok, file_sizes} = Qpdf.page_size_vector({:file, pdf_file})
+      assert file_sizes == sizes
+    end
+
+    test "returns :enoent for non-existent file" do
+      assert {:error, :enoent} = Qpdf.page_size_vector({:file, "/non/existent/file.pdf"})
     end
 
     test "returns an error for non-PDF input" do
