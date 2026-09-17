@@ -70,6 +70,38 @@ defmodule QpdfTest do
     end
   end
 
+  describe "merge/1" do
+    test "merges multiple binaries", %{pdf_binary: pdf_binary} do
+      {:ok, merged} = Qpdf.merge([pdf_binary, pdf_binary])
+      assert page_count!(merged) == 28
+    end
+
+    test "merges multiple {:file, path} inputs", %{pdf_file: pdf_file} do
+      {:ok, merged} = Qpdf.merge([{:file, pdf_file}, {:file, pdf_file}])
+      assert page_count!(merged) == 28
+    end
+
+    test "merges mixed binary and {:file, path} inputs with page ranges", %{
+      pdf_binary: pdf_binary,
+      pdf_file: pdf_file
+    } do
+      {:ok, merged} = Qpdf.merge([{{:file, pdf_file}, 1..2}, {pdf_binary, "1-3"}])
+      assert page_count!(merged) == 5
+    end
+
+    test "returns :empty_inputs for empty list" do
+      assert {:error, :empty_inputs} = Qpdf.merge([])
+    end
+
+    test "returns :enoent for non-existent file" do
+      assert {:error, :enoent} = Qpdf.merge([{:file, "/non/existent.pdf"}])
+    end
+
+    test "returns :invalid_input for invalid items" do
+      assert {:error, :invalid_input} = Qpdf.merge([12345])
+    end
+  end
+
   describe "split_pages/2" do
     test "splits into individual pages by default", %{pdf_binary: pdf_binary} do
       {:ok, pages} = Qpdf.split_pages(pdf_binary)

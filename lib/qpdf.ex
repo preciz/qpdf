@@ -66,6 +66,52 @@ defmodule Qpdf do
   def page(input, page_spec), do: pages(input, page_spec)
 
   @doc """
+  Merges multiple PDFs into a single document.
+
+  Accepts a list of inputs. Each item in the list can be:
+    * an `input` (binary or `{:file, path}`) to include all its pages
+    * a `{input, page_spec}` tuple to include only specific pages or ranges
+
+  Outputs the merged PDF directly to standard output without intermediate disk files.
+
+  ## Examples
+
+      # Merge multiple binaries
+      {:ok, merged} = Qpdf.merge([pdf1, pdf2])
+
+      # Merge files directly from disk without reading them into memory
+      {:ok, merged} = Qpdf.merge([{:file, "cover.pdf"}, {:file, "body.pdf"}])
+
+      # Merge specific page selections from different documents
+      {:ok, merged} = Qpdf.merge([
+        {{:file, "report.pdf"}, 1..5},
+        {appendix_binary, "1-z:even"}
+      ])
+  """
+  @spec merge([input() | {input(), integer() | Range.t() | list() | String.t()}]) ::
+          {:ok, binary()} | {:error, any()}
+  def merge(inputs) when is_list(inputs) do
+    if Enum.empty?(inputs) do
+      {:error, :empty_inputs}
+    else
+      with_merged_inputs(inputs, fn file_specs ->
+        pages_args =
+          Enum.flat_map(file_specs, fn
+            {path, nil} -> [path]
+            {path, spec} -> [path, format_page_spec(spec)]
+          end)
+
+        args = ["--empty" | @default_opts] ++ ["--pages" | pages_args] ++ ["--", "-"]
+
+        case run_qpdf(args) do
+          {output, 0} -> {:ok, output}
+          other -> {:error, other}
+        end
+      end)
+    end
+  end
+
+  @doc """
   Splits a PDF into pages or consecutive groups of pages.
 
   Defaults to splitting into individual single-page documents (`pages_per_group: 1`).
@@ -293,6 +339,69 @@ defmodule Qpdf do
           File.write!(in_file, binary)
           func.(in_file)
         end)
+
+      {:error, _} = error ->
+        error
+    end
+  end
+
+  defp with_merged_inputs(inputs, func) do
+    parsed =
+      Enum.reduce_while(inputs, {:ok, []}, fn
+        {{:file, path}, spec}, {:ok, acc} ->
+          expanded = Path.expand(path)
+
+          if File.regular?(expanded) do
+            {:cont, {:ok, [{:file, expanded, spec} | acc]}}
+          else
+            {:halt, {:error, :enoent}}
+          end
+
+        {:file, path}, {:ok, acc} ->
+          expanded = Path.expand(path)
+
+          if File.regular?(expanded) do
+            {:cont, {:ok, [{:file, expanded, nil} | acc]}}
+          else
+            {:halt, {:error, :enoent}}
+          end
+
+        {binary, spec}, {:ok, acc} when is_binary(binary) ->
+          {:cont, {:ok, [{:binary, binary, spec} | acc]}}
+
+        binary, {:ok, acc} when is_binary(binary) ->
+          {:cont, {:ok, [{:binary, binary, nil} | acc]}}
+
+        _other, _acc ->
+          {:halt, {:error, :invalid_input}}
+      end)
+
+    case parsed do
+      {:ok, reversed} ->
+        items = Enum.reverse(reversed)
+        has_binary? = Enum.any?(items, fn {type, _, _} -> type == :binary end)
+
+        if has_binary? do
+          with_tmp_dir(fn dir ->
+            file_specs =
+              items
+              |> Enum.with_index(1)
+              |> Enum.map(fn
+                {{:binary, bin, spec}, idx} ->
+                  file_path = Path.join(dir, "input_#{idx}.pdf")
+                  File.write!(file_path, bin)
+                  {file_path, spec}
+
+                {{:file, path, spec}, _idx} ->
+                  {path, spec}
+              end)
+
+            func.(file_specs)
+          end)
+        else
+          file_specs = Enum.map(items, fn {:file, path, spec} -> {path, spec} end)
+          func.(file_specs)
+        end
 
       {:error, _} = error ->
         error
