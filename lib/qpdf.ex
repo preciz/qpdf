@@ -15,6 +15,7 @@ defmodule Qpdf do
   loading the entire document into BEAM memory or writing redundant temporary copies.
   """
 
+  alias Qpdf.Attachments
   alias Qpdf.CLI
   alias Qpdf.Encryption
   alias Qpdf.Installer
@@ -655,43 +656,7 @@ defmodule Qpdf do
       # => [%{key: "invoice.xml", filename: "invoice.xml", mimetype: "application/xml", ...}]
   """
   @spec attachments(input()) :: {:ok, [map()]} | {:error, any()}
-  def attachments(input) do
-    case json(input) do
-      {:ok, %{"attachments" => atts}} when is_map(atts) ->
-        {:ok, Enum.map(atts, &parse_attachment_entry/1)}
-
-      {:ok, _} ->
-        {:ok, []}
-
-      error ->
-        error
-    end
-  end
-
-  defp parse_attachment_entry({key, att_data}) do
-    stream_info = extract_stream_info(att_data["streams"])
-    filename = resolve_attachment_entry_filename(key, att_data)
-
-    %{
-      key: key,
-      filename: filename,
-      mimetype: stream_info["mimetype"],
-      description: att_data["description"],
-      creation_date: stream_info["creationdate"],
-      modification_date: stream_info["modificationdate"],
-      checksum: stream_info["checksum"],
-      filespec: att_data["filespec"]
-    }
-  end
-
-  defp extract_stream_info(%{"/UF" => uf}), do: uf
-  defp extract_stream_info(%{"/F" => f}), do: f
-  defp extract_stream_info(_), do: %{}
-
-  defp resolve_attachment_entry_filename(key, att_data) do
-    names = att_data["names"] || %{}
-    att_data["preferredname"] || names["/UF"] || names["/F"] || key
-  end
+  defdelegate attachments(input), to: Attachments, as: :list
 
   @doc """
   Extracts the raw contents of an embedded attachment by key.
@@ -708,21 +673,7 @@ defmodule Qpdf do
   """
   @spec extract_attachment(input(), String.t(), keyword()) ::
           {:ok, binary() | Path.t()} | {:error, any()}
-  def extract_attachment(input, key, opts \\ []) when is_binary(key) do
-    with_input_path(input, fn in_file ->
-      case run_qpdf(["--no-warn", "--warning-exit-0", "--show-attachment=#{key}", in_file]) do
-        {output, 0} ->
-          deliver_output(output, opts)
-
-        {output, _code} ->
-          handle_extract_error(output)
-      end
-    end)
-  end
-
-  defp handle_extract_error(output) do
-    if String.contains?(output, "not found"), do: {:error, :not_found}, else: {:error, output}
-  end
+  defdelegate extract_attachment(input, key, opts \\ []), to: Attachments, as: :extract
 
   @doc """
   Embeds an attachment (file or binary data) into the PDF document.
@@ -753,45 +704,7 @@ defmodule Qpdf do
   """
   @spec add_attachment(input(), input(), keyword()) ::
           {:ok, binary() | Path.t()} | {:error, any()}
-  def add_attachment(input, attachment, opts \\ []) do
-    case resolve_input(attachment) do
-      {:ok, resolved_att} ->
-        {key, filename} = resolve_attachment_names(resolved_att, opts)
-
-        with_two_inputs(
-          input,
-          attachment,
-          fn in_file, att_file ->
-            att_opts = build_attachment_args(key, filename, opts)
-
-            args =
-              [in_file | @default_opts] ++ ["--add-attachment", att_file] ++ att_opts ++ ["--"]
-
-            run_qpdf_into(args, opts)
-          end,
-          {"document.pdf", "attachment.bin"}
-        )
-
-      {:error, :enoent} = err ->
-        err
-
-      {:error, :invalid_input} ->
-        {:error, :invalid_attachment}
-    end
-  end
-
-  defp resolve_attachment_names({:file, p}, opts) do
-    base = Path.basename(p)
-    key = Keyword.get(opts, :key, base)
-    filename = Keyword.get(opts, :filename, base)
-    {key, filename}
-  end
-
-  defp resolve_attachment_names({:binary, _}, opts) do
-    key = Keyword.get(opts, :key, "attachment")
-    filename = Keyword.get(opts, :filename, key)
-    {key, filename}
-  end
+  defdelegate add_attachment(input, attachment, opts \\ []), to: Attachments, as: :add
 
   @doc """
   Removes an embedded attachment from the PDF by key.
@@ -807,18 +720,7 @@ defmodule Qpdf do
   """
   @spec remove_attachment(input(), String.t(), keyword()) ::
           {:ok, binary() | Path.t()} | {:error, any()}
-  def remove_attachment(input, key, opts \\ []) when is_binary(key) do
-    with_input_path(input, fn in_file ->
-      args = [in_file | @default_opts] ++ ["--remove-attachment=#{key}"]
-      handle_remove_attachment_result(run_qpdf_into(args, opts))
-    end)
-  end
-
-  defp handle_remove_attachment_result({:error, {output, _code}} = err) do
-    if String.contains?(output, "not found"), do: {:error, :not_found}, else: err
-  end
-
-  defp handle_remove_attachment_result(other), do: other
+  defdelegate remove_attachment(input, key, opts \\ []), to: Attachments, as: :remove
 
   @doc """
   Checks whether the PDF file is syntactically valid.
@@ -994,8 +896,6 @@ defmodule Qpdf do
     {:ok, dest_files}
   end
 
-  defp deliver_output(output, opts), do: CLI.deliver_output(output, opts)
-
   defp apply_layer(input, type, layer_input, opts) do
     with_two_inputs(
       input,
@@ -1030,19 +930,6 @@ defmodule Qpdf do
   defp pass_layer_arg(nil), do: []
   defp pass_layer_arg(pass), do: ["--password=#{pass}"]
 
-  defp build_attachment_args(key, filename, opts) do
-    [
-      ["--key=#{key}", "--filename=#{filename}"],
-      if(mt = Keyword.get(opts, :mimetype), do: ["--mimetype=#{mt}"], else: []),
-      if(desc = Keyword.get(opts, :description), do: ["--description=#{desc}"], else: []),
-      if(cd = Keyword.get(opts, :creation_date), do: ["--creationdate=#{cd}"], else: []),
-      if(md = Keyword.get(opts, :mod_date), do: ["--moddate=#{md}"], else: []),
-      if(Keyword.get(opts, :replace, false), do: ["--replace"], else: [])
-    ]
-    |> List.flatten()
-  end
-
-  defp resolve_input(input), do: Temp.resolve_input(input)
   defp with_input_path(input, func), do: Temp.with_input_path(input, func)
   defp with_two_inputs(i1, i2, func, names), do: Temp.with_two_inputs(i1, i2, func, names)
   defp with_merged_inputs(inputs, func), do: Temp.with_merged_inputs(inputs, func)
