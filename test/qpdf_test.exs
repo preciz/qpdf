@@ -278,6 +278,66 @@ defmodule QpdfTest do
     end
   end
 
+  describe "encrypt/2 and decrypt/2" do
+    test "encrypts and decrypts with passwords", %{pdf_binary: pdf_binary} do
+      {:ok, enc} =
+        Qpdf.encrypt(pdf_binary,
+          user_password: "user",
+          owner_password: "owner",
+          key_length: 256,
+          print: :none,
+          modify: :none,
+          extract: false,
+          annotate: false,
+          cleartext_metadata: true
+        )
+
+      assert Qpdf.encrypted?(enc) == true
+
+      # Decrypt with correct password
+      {:ok, dec} = Qpdf.decrypt(enc, password: "user")
+      assert Qpdf.encrypted?(dec) == false
+      assert page_count!(dec) == 14
+
+      # Decrypt with wrong password fails
+      assert {:error, _} = Qpdf.decrypt(enc, password: "wrong")
+    end
+
+    test "encrypts with user password only (insecure)", %{pdf_binary: pdf_binary} do
+      {:ok, enc} = Qpdf.encrypt(pdf_binary, user_password: "user123")
+      assert Qpdf.encrypted?(enc) == true
+
+      {:ok, dec} = Qpdf.decrypt(enc, password: "user123")
+      assert Qpdf.encrypted?(dec) == false
+    end
+
+    test "encrypts and decrypts with {:file, path}", %{pdf_file: pdf_file} do
+      {:ok, enc} = Qpdf.encrypt({:file, pdf_file}, user_password: "fileuser", owner_password: "fileowner")
+      assert Qpdf.encrypted?(enc) == true
+
+      tmp_enc = Path.join(System.tmp_dir!(), "enc_unit_test.pdf")
+      File.write!(tmp_enc, enc)
+
+      try do
+        {:ok, dec} = Qpdf.decrypt({:file, tmp_enc}, password: "fileuser")
+        assert Qpdf.encrypted?(dec) == false
+        assert page_count!(dec) == 14
+      after
+        File.rm(tmp_enc)
+      end
+    end
+
+    test "returns :enoent for non-existent file" do
+      assert {:error, :enoent} = Qpdf.encrypt({:file, "/non/existent.pdf"})
+      assert {:error, :enoent} = Qpdf.decrypt({:file, "/non/existent.pdf"})
+    end
+
+    test "returns :invalid_input for invalid input" do
+      assert {:error, :invalid_input} = Qpdf.encrypt(12345)
+      assert {:error, :invalid_input} = Qpdf.decrypt(12345)
+    end
+  end
+
   describe "check/1" do
     test "returns :ok for valid PDF", %{pdf_binary: pdf_binary, pdf_file: pdf_file} do
       assert :ok = Qpdf.check(pdf_binary)

@@ -329,6 +329,72 @@ defmodule Qpdf do
   end
 
   @doc """
+  Encrypts a PDF document with password protection and access permissions.
+
+  Outputs the encrypted PDF directly to standard output without intermediate disk files.
+
+  ## Options
+    * `:user_password` - password required to open the PDF (default: `""`)
+    * `:owner_password` - password required to modify permissions (default: `""`)
+    * `:key_length` - encryption key length: `40`, `128`, or `256` (default: `256`)
+    * `:print` - print permission: `:none`, `:low`, or `:full`
+    * `:modify` - modification permission: `:none`, `:assembly`, `:form`, `:annotate`, or `:all`
+    * `:extract` - boolean, allow text/graphic extraction
+    * `:annotate` - boolean, allow annotations and commenting
+    * `:cleartext_metadata` - boolean, keep metadata unencrypted
+
+  ## Examples
+
+      # Encrypt with user and owner passwords
+      {:ok, enc} = Qpdf.encrypt(input, user_password: "open", owner_password: "admin")
+
+      # Encrypt with restricted permissions
+      {:ok, enc} = Qpdf.encrypt(input, owner_password: "admin", print: :none, extract: false)
+  """
+  @spec encrypt(input(), keyword()) :: {:ok, binary()} | {:error, any()}
+  def encrypt(input, opts \\ []) do
+    with_input_path(input, fn in_file ->
+      encrypt_args = build_encrypt_args(opts)
+      args = [in_file, "--no-warn", "--warning-exit-0"] ++ encrypt_args ++ ["--", "-"]
+
+      case run_qpdf(args) do
+        {output, 0} -> {:ok, output}
+        other -> {:error, other}
+      end
+    end)
+  end
+
+  @doc """
+  Decrypts an encrypted PDF document, optionally using a password.
+
+  Outputs the unencrypted PDF directly to standard output without intermediate disk files.
+
+  ## Options
+    * `:password` - password required to decrypt the document
+
+  ## Examples
+
+      {:ok, plain_pdf} = Qpdf.decrypt(encrypted_input, password: "secret")
+  """
+  @spec decrypt(input(), keyword()) :: {:ok, binary()} | {:error, any()}
+  def decrypt(input, opts \\ []) do
+    with_input_path(input, fn in_file ->
+      password_args =
+        case Keyword.get(opts, :password) do
+          nil -> []
+          pass -> ["--password=#{pass}"]
+        end
+
+      args = password_args ++ [in_file, "--no-warn", "--warning-exit-0", "--decrypt", "--", "-"]
+
+      case run_qpdf(args) do
+        {output, 0} -> {:ok, output}
+        other -> {:error, other}
+      end
+    end)
+  end
+
+  @doc """
   Checks whether the PDF file is syntactically valid.
 
   Uses `qpdf --check`.
@@ -401,6 +467,57 @@ defmodule Qpdf do
 
   defp format_rotate_arg(angle, spec) do
     "--rotate=#{angle}:#{format_page_spec(spec)}"
+  end
+
+  defp build_encrypt_args(opts) do
+    user_pass = Keyword.get(opts, :user_password)
+    owner_pass = Keyword.get(opts, :owner_password)
+    bits = Keyword.get(opts, :key_length, 256)
+
+    pass_args =
+      []
+      |> then(fn acc -> if user_pass, do: acc ++ ["--user-password=#{user_pass}"], else: acc end)
+      |> then(fn acc -> if owner_pass, do: acc ++ ["--owner-password=#{owner_pass}"], else: acc end)
+
+    insecure_arg =
+      if user_pass && !owner_pass, do: ["--allow-insecure"], else: []
+
+    permission_args =
+      []
+      |> then(fn acc ->
+        case Keyword.get(opts, :print) do
+          val when val in [:none, :low, :full] -> acc ++ ["--print=#{val}"]
+          _ -> acc
+        end
+      end)
+      |> then(fn acc ->
+        case Keyword.get(opts, :modify) do
+          val when val in [:none, :assembly, :form, :annotate, :all] -> acc ++ ["--modify=#{val}"]
+          _ -> acc
+        end
+      end)
+      |> then(fn acc ->
+        case Keyword.get(opts, :extract) do
+          true -> acc ++ ["--extract=y"]
+          false -> acc ++ ["--extract=n"]
+          _ -> acc
+        end
+      end)
+      |> then(fn acc ->
+        case Keyword.get(opts, :annotate) do
+          true -> acc ++ ["--annotate=y"]
+          false -> acc ++ ["--annotate=n"]
+          _ -> acc
+        end
+      end)
+      |> then(fn acc ->
+        case Keyword.get(opts, :cleartext_metadata) do
+          true -> acc ++ ["--cleartext-metadata"]
+          _ -> acc
+        end
+      end)
+
+    ["--encrypt"] ++ pass_args ++ ["--bits=#{bits}"] ++ insecure_arg ++ permission_args
   end
 
   defp list_page_files(dir) do
