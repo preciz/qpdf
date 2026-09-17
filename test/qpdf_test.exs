@@ -147,6 +147,10 @@ defmodule QpdfTest do
       {:ok, overlaid} = Qpdf.overlay(pdf_binary, page1, to: 1, from: 1)
       assert page_count!(overlaid) == 14
       assert :ok = Qpdf.check(overlaid)
+
+      {:ok, overlaid2} = Qpdf.overlay(pdf_binary, page1, repeat: "1")
+      assert page_count!(overlaid2) == 14
+      assert :ok = Qpdf.check(overlaid2)
     end
 
     test "underlays with {:file, path}", %{pdf_file: pdf_file, pdf_binary: pdf_binary} do
@@ -332,15 +336,32 @@ defmodule QpdfTest do
     end
 
     test "optimizes with options", %{pdf_binary: pdf_binary} do
-      {:ok, opt} =
+      {:ok, opt1} =
         Qpdf.optimize(pdf_binary,
           stream_data: :compress,
           object_streams: :generate,
           recompress_flate: true
         )
 
-      assert page_count!(opt) == 14
-      assert :ok = Qpdf.check(opt)
+      assert page_count!(opt1) == 14
+      assert :ok = Qpdf.check(opt1)
+
+      {:ok, opt2} =
+        Qpdf.optimize(pdf_binary,
+          stream_data: :uncompress,
+          object_streams: :preserve,
+          recompress_flate: false
+        )
+
+      assert page_count!(opt2) == 14
+
+      {:ok, opt3} =
+        Qpdf.optimize(pdf_binary,
+          stream_data: :preserve,
+          object_streams: :disable
+        )
+
+      assert page_count!(opt3) == 14
     end
 
     test "optimizes with {:file, path}", %{pdf_file: pdf_file, pdf_binary: pdf_binary} do
@@ -409,6 +430,23 @@ defmodule QpdfTest do
       after
         File.rm(tmp_enc)
       end
+    end
+
+    test "encrypts with custom permissions", %{pdf_binary: pdf_binary} do
+      {:ok, enc} =
+        Qpdf.encrypt(pdf_binary,
+          user_password: "open",
+          owner_password: "admin",
+          print: :full,
+          modify: :all,
+          extract: true,
+          annotate: true,
+          cleartext_metadata: true
+        )
+
+      assert Qpdf.encrypted?(enc) == true
+      {:ok, dec} = Qpdf.decrypt(enc, password: "open")
+      assert Qpdf.encrypted?(dec) == false
     end
 
     test "returns :enoent for non-existent file" do
@@ -660,7 +698,9 @@ defmodule QpdfTest do
           key: "invoice.xml",
           filename: "factur-x.xml",
           mimetype: "text/xml",
-          description: "E-Invoice"
+          description: "E-Invoice",
+          creation_date: "D:20260101000000Z",
+          mod_date: "D:20260102000000Z"
         )
 
       assert {:ok, [att]} = Qpdf.attachments(with_att)
@@ -672,7 +712,7 @@ defmodule QpdfTest do
       # Extract to memory
       assert {:ok, ^payload} = Qpdf.extract_attachment(with_att, "invoice.xml")
 
-      # Extract directly to file with into:
+      # Extract directly to file with into: {:file, ...}
       dest_extracted =
         Path.join(
           System.tmp_dir!(),
@@ -682,7 +722,7 @@ defmodule QpdfTest do
       on_exit(fn -> File.rm(dest_extracted) end)
 
       assert {:ok, ^dest_extracted} =
-               Qpdf.extract_attachment(with_att, "invoice.xml", into: dest_extracted)
+               Qpdf.extract_attachment(with_att, "invoice.xml", into: {:file, dest_extracted})
 
       assert File.read!(dest_extracted) == payload
 
@@ -743,6 +783,82 @@ defmodule QpdfTest do
 
       assert {:error, :invalid_input} = Qpdf.add_attachment(12345, "content")
       assert {:error, _} = Qpdf.attachments("not a pdf")
+    end
+  end
+
+  describe "dimensions/1 and dimensions/2" do
+    test "returns dimensions for all pages", %{pdf_binary: pdf_binary, pdf_file: pdf_file} do
+      assert {:ok, dims} = Qpdf.dimensions(pdf_binary)
+      assert length(dims) == 14
+
+      page1 = hd(dims)
+      assert page1.page == 1
+      assert page1.width == 439.37
+      assert page1.height == 666.14
+      assert page1.rotation == 0
+      assert page1.orientation == :portrait
+      assert page1.box.media == [0.0, 0.0, 439.37, 666.14]
+      assert page1.box.crop == [0.0, 0.0, 439.37, 666.14]
+
+      # Works with {:file, path}
+      assert {:ok, file_dims} = Qpdf.dimensions({:file, pdf_file})
+      assert length(file_dims) == 14
+    end
+
+    test "returns single page dimension when integer page is given", %{pdf_binary: pdf_binary} do
+      assert {:ok, page1} = Qpdf.dimensions(pdf_binary, 1)
+      assert page1.page == 1
+      assert page1.orientation == :portrait
+
+      assert {:error, :not_found} = Qpdf.dimensions(pdf_binary, 999)
+    end
+
+    test "returns dimensions for Range or list", %{pdf_binary: pdf_binary} do
+      assert {:ok, range_dims} = Qpdf.dimensions(pdf_binary, 1..3)
+      assert length(range_dims) == 3
+      assert Enum.map(range_dims, & &1.page) == [1, 2, 3]
+
+      assert {:ok, list_dims} = Qpdf.dimensions(pdf_binary, [1, 5, 10])
+      assert length(list_dims) == 3
+      assert Enum.map(list_dims, & &1.page) == [1, 5, 10]
+    end
+
+    test "updates dimensions and orientation when page is rotated", %{pdf_binary: pdf_binary} do
+      {:ok, rotated} = Qpdf.rotate(pdf_binary, 90, 1)
+
+      assert {:ok, rot_page1} = Qpdf.dimensions(rotated, 1)
+      assert rot_page1.rotation == 90
+      assert rot_page1.width == 666.14
+      assert rot_page1.height == 439.37
+      assert rot_page1.orientation == :landscape
+    end
+
+    test "detects paper size and square orientation", %{pdf_binary: pdf_binary} do
+      {:ok, page1} = Qpdf.page(pdf_binary, 1)
+
+      a4_pdf = :binary.replace(page1, "439.37 666.14", "595.28 841.89")
+      assert {:ok, a4_dim} = Qpdf.dimensions(a4_pdf, 1)
+      assert a4_dim.paper_size == "A4"
+
+      sq_pdf = :binary.replace(page1, "439.37 666.14", "500.00 500.00")
+      assert {:ok, sq_dim} = Qpdf.dimensions(sq_pdf, 1)
+      assert sq_dim.orientation == :square
+    end
+
+    test "returns errors for invalid input or page spec", %{pdf_binary: pdf_binary} do
+      assert {:error, :invalid_page_spec} = Qpdf.dimensions(pdf_binary, "invalid")
+      assert {:error, _} = Qpdf.dimensions("not a pdf")
+    end
+  end
+
+  describe "json/2 version option" do
+    test "supports version: 1 and version: 2", %{pdf_binary: pdf_binary} do
+      assert {:ok, v2} = Qpdf.json(pdf_binary, version: 2)
+      assert v2["version"] == 2
+
+      assert {:ok, v1} = Qpdf.json(pdf_binary, version: 1)
+      assert v1["version"] == 1
+      assert Map.has_key?(v1, "objects")
     end
   end
 

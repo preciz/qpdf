@@ -477,17 +477,23 @@ defmodule Qpdf do
   Uses `qpdf --json`.
   Decodes the JSON output into native Elixir maps and lists using the standard library `JSON` module.
 
-  ## Parameters
-    - input: The PDF as a binary or `{:file, path}`
+  ## Options
+    * `:version` - JSON schema version (e.g. `1` or `2`, default: `2`)
 
   ## Returns
     - `{:ok, map}` on success
     - `{:error, any}` on failure
   """
-  @spec json(input()) :: {:ok, map()} | {:error, any()}
-  def json(input) do
+  @spec json(input(), keyword()) :: {:ok, map()} | {:error, any()}
+  def json(input, opts \\ []) do
     with_input_path(input, fn in_file ->
-      args = @default_opts ++ ["--json", in_file]
+      json_arg =
+        case Keyword.get(opts, :version) do
+          nil -> "--json"
+          v -> "--json=#{v}"
+        end
+
+      args = @default_opts ++ [json_arg, in_file]
 
       case run_qpdf(args) do
         {output, 0} ->
@@ -504,10 +510,77 @@ defmodule Qpdf do
 
   @doc """
   Extracts document metadata and structure as a map.
-  Alias for `json/1`.
+  Alias for `json/2`.
   """
-  @spec metadata(input()) :: {:ok, map()} | {:error, any()}
-  def metadata(input), do: json(input)
+  @spec metadata(input(), keyword()) :: {:ok, map()} | {:error, any()}
+  def metadata(input, opts \\ []), do: json(input, opts)
+
+  @doc """
+  Inspects page geometry, bounding boxes, dimensions, orientation, and paper size.
+
+  Returns width and height in points (1/72 inch), visual orientation (`:portrait`,
+  `:landscape`, `:square`), rotation angle (0, 90, 180, 270), and media/crop bounding boxes.
+
+  ## Parameters
+    - `input`: The PDF as binary or `{:file, path}`
+    - `page_spec`: Target page or pages:
+      - `:all` (default) - returns a list of dimensions for all pages
+      - integer (e.g. `1`) - returns a single dimension map for that page
+      - `Range` or `list` (e.g. `1..3`) - returns a list of dimensions for specified pages
+
+  ## Examples
+
+      # Inspect all pages
+      {:ok, pages} = Qpdf.dimensions(pdf)
+      # => [%{page: 1, width: 595.28, height: 841.89, orientation: :portrait, paper_size: "A4", ...}]
+
+      # Inspect a single page
+      {:ok, page1} = Qpdf.dimensions(pdf, 1)
+      page1.orientation #=> :portrait
+      page1.paper_size  #=> "A4"
+  """
+  @spec dimensions(input(), :all | integer() | Range.t() | list()) ::
+          {:ok, map() | [map()]} | {:error, any()}
+  def dimensions(input, page_spec \\ :all) do
+    case json(input, version: 1) do
+      {:ok, data} ->
+        pages = data["pages"] || []
+        objects = data["objects"] || %{}
+
+        all_dims =
+          Enum.map(pages, fn page ->
+            page_num = page["pageposfrom1"]
+            page_obj_key = page["object"]
+            obj_data = objects[page_obj_key] || %{}
+
+            media_box = resolve_media_box(obj_data, objects)
+            crop_box = resolve_crop_box(obj_data, media_box)
+            rotation = resolve_rotation(obj_data, objects)
+
+            {width, height} = calculate_page_dimensions(media_box, rotation)
+            orientation = determine_orientation(width, height)
+            paper_size = detect_paper_size(width, height)
+
+            %{
+              page: page_num,
+              width: width,
+              height: height,
+              rotation: rotation,
+              orientation: orientation,
+              paper_size: paper_size,
+              box: %{
+                media: media_box,
+                crop: crop_box
+              }
+            }
+          end)
+
+        filter_dimensions(all_dims, page_spec)
+
+      error ->
+        error
+    end
+  end
 
   @doc """
   Returns a list of all embedded attachments in the PDF.
@@ -1184,6 +1257,120 @@ defmodule Qpdf do
         error
     end
   end
+
+  @paper_sizes [
+    {"A0", 2384.0, 3370.0},
+    {"A1", 1684.0, 2384.0},
+    {"A2", 1191.0, 1684.0},
+    {"A3", 842.0, 1191.0},
+    {"A4", 595.28, 841.89},
+    {"A5", 419.53, 595.28},
+    {"A6", 297.64, 419.53},
+    {"Letter", 612.0, 792.0},
+    {"Legal", 612.0, 1008.0},
+    {"Tabloid", 792.0, 1224.0},
+    {"Executive", 522.0, 756.0}
+  ]
+
+  defp resolve_media_box(obj_data, objects) do
+    case obj_data["/MediaBox"] do
+      [x0, y0, x1, y1]
+      when is_number(x0) and is_number(y0) and is_number(x1) and is_number(y1) ->
+        [x0 * 1.0, y0 * 1.0, x1 * 1.0, y1 * 1.0]
+
+      _ ->
+        case obj_data["/Parent"] do
+          parent_key when is_binary(parent_key) ->
+            resolve_media_box(objects[parent_key] || %{}, objects)
+
+          _ ->
+            [0.0, 0.0, 612.0, 792.0]
+        end
+    end
+  end
+
+  defp resolve_crop_box(obj_data, fallback) do
+    case obj_data["/CropBox"] do
+      [x0, y0, x1, y1]
+      when is_number(x0) and is_number(y0) and is_number(x1) and is_number(y1) ->
+        [x0 * 1.0, y0 * 1.0, x1 * 1.0, y1 * 1.0]
+
+      _ ->
+        fallback
+    end
+  end
+
+  defp resolve_rotation(obj_data, objects) do
+    case obj_data["/Rotate"] do
+      rot when is_integer(rot) ->
+        rem(rem(rot, 360) + 360, 360)
+
+      _ ->
+        case obj_data["/Parent"] do
+          parent_key when is_binary(parent_key) ->
+            resolve_rotation(objects[parent_key] || %{}, objects)
+
+          _ ->
+            0
+        end
+    end
+  end
+
+  defp calculate_page_dimensions([x0, y0, x1, y1], rotation) do
+    raw_w = abs(x1 - x0)
+    raw_h = abs(y1 - y0)
+
+    if rem(rotation, 180) == 90 do
+      {Float.round(raw_h * 1.0, 2), Float.round(raw_w * 1.0, 2)}
+    else
+      {Float.round(raw_w * 1.0, 2), Float.round(raw_h * 1.0, 2)}
+    end
+  end
+
+  defp determine_orientation(width, height) do
+    cond do
+      width > height -> :landscape
+      width < height -> :portrait
+      true -> :square
+    end
+  end
+
+  defp detect_paper_size(width, height) do
+    min_dim = min(width, height)
+    max_dim = max(width, height)
+
+    Enum.find_value(@paper_sizes, fn {name, pw, ph} ->
+      target_min = min(pw, ph)
+      target_max = max(pw, ph)
+
+      if abs(min_dim - target_min) <= 3.0 and abs(max_dim - target_max) <= 3.0 do
+        name
+      else
+        nil
+      end
+    end)
+  end
+
+  defp filter_dimensions(all_dims, :all), do: {:ok, all_dims}
+
+  defp filter_dimensions(all_dims, page_num) when is_integer(page_num) do
+    case Enum.find(all_dims, &(&1.page == page_num)) do
+      nil -> {:error, :not_found}
+      dim -> {:ok, dim}
+    end
+  end
+
+  defp filter_dimensions(all_dims, %Range{} = range) do
+    selected = Enum.filter(all_dims, &(&1.page in range))
+    {:ok, selected}
+  end
+
+  defp filter_dimensions(all_dims, pages) when is_list(pages) do
+    selected = Enum.filter(all_dims, &(&1.page in pages))
+    {:ok, selected}
+  end
+
+  defp filter_dimensions(_all_dims, _other), do: {:error, :invalid_page_spec}
 
   defp resolve_input({:file, path}) when is_binary(path) do
     expanded = Path.expand(path)
