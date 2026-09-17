@@ -881,6 +881,181 @@ defmodule QpdfTest do
     end
   end
 
+  describe "optimize_images/2" do
+    test "optimizes raster images in PDF binary", %{pdf_binary: pdf_binary} do
+      assert {:ok, opt_bin} = Qpdf.optimize_images(pdf_binary)
+      assert is_binary(opt_bin)
+      assert page_count!(opt_bin) == 14
+    end
+
+    test "optimizes with {:file, path} and destination :into", %{pdf_file: pdf_file} do
+      tmp_out =
+        Path.join(System.tmp_dir!(), "opt_img_#{Base.encode16(:crypto.strong_rand_bytes(4))}.pdf")
+
+      try do
+        assert {:ok, ^tmp_out} =
+                 Qpdf.optimize_images({:file, pdf_file},
+                   jpeg_quality: 75,
+                   min_width: 50,
+                   min_height: 50,
+                   min_area: 2_500,
+                   keep_inline_images: true,
+                   externalize_inline_images: true,
+                   remove_unreferenced: true,
+                   into: tmp_out
+                 )
+
+        assert File.exists?(tmp_out)
+        assert page_count!(File.read!(tmp_out)) == 14
+      after
+        File.rm(tmp_out)
+      end
+    end
+
+    test "returns :enoent for non-existent file" do
+      assert {:error, :enoent} = Qpdf.optimize_images({:file, "/non/existent.pdf"})
+    end
+
+    test "returns :invalid_input for invalid input" do
+      assert {:error, :invalid_input} = Qpdf.optimize_images(12_345)
+    end
+  end
+
+  describe "password_valid?/2 and requires_password?/1" do
+    test "validates passwords for encrypted PDF", %{pdf_binary: pdf_binary} do
+      {:ok, enc} =
+        Qpdf.encrypt(pdf_binary, user_password: "user_secret", owner_password: "admin_secret")
+
+      assert Qpdf.requires_password?(enc) == true
+      assert Qpdf.password_valid?(enc, "user_secret") == true
+      assert Qpdf.password_valid?(enc, "admin_secret") == true
+      assert Qpdf.password_valid?(enc, "wrong_pass") == false
+      assert Qpdf.password_valid?(enc, "") == false
+    end
+
+    test "handles owner-only encrypted PDF (empty user password)", %{pdf_binary: pdf_binary} do
+      {:ok, enc_owner} =
+        Qpdf.encrypt(pdf_binary, owner_password: "admin_secret")
+
+      assert Qpdf.requires_password?(enc_owner) == false
+      assert Qpdf.password_valid?(enc_owner, "") == true
+      assert Qpdf.password_valid?(enc_owner, "admin_secret") == true
+      assert Qpdf.password_valid?(enc_owner, "wrong_pass") == false
+    end
+
+    test "returns false for unencrypted PDF", %{pdf_binary: pdf_binary, pdf_file: pdf_file} do
+      assert Qpdf.requires_password?(pdf_binary) == false
+      assert Qpdf.password_valid?(pdf_binary, "any_pass") == false
+      assert Qpdf.password_valid?(pdf_binary, "") == false
+
+      assert Qpdf.requires_password?({:file, pdf_file}) == false
+      assert Qpdf.password_valid?({:file, pdf_file}, "any_pass") == false
+    end
+
+    test "handles {:file, path} for encrypted PDF", %{pdf_binary: pdf_binary} do
+      {:ok, enc} = Qpdf.encrypt(pdf_binary, user_password: "pw", owner_password: "admin")
+
+      tmp_enc =
+        Path.join(
+          System.tmp_dir!(),
+          "pw_valid_#{Base.encode16(:crypto.strong_rand_bytes(4))}.pdf"
+        )
+
+      File.write!(tmp_enc, enc)
+
+      try do
+        assert Qpdf.requires_password?({:file, tmp_enc}) == true
+        assert Qpdf.password_valid?({:file, tmp_enc}, "pw") == true
+        assert Qpdf.password_valid?({:file, tmp_enc}, "wrong") == false
+      after
+        File.rm(tmp_enc)
+      end
+    end
+
+    test "returns errors for invalid input or password" do
+      assert {:error, :invalid_input} = Qpdf.requires_password?(12_345)
+      assert {:error, :invalid_input} = Qpdf.password_valid?(12_345, "secret")
+      assert {:error, :invalid_password} = Qpdf.password_valid?("binary", 12_345)
+      assert {:error, :enoent} = Qpdf.password_valid?({:file, "/non/existent.pdf"}, "secret")
+      assert {:error, :enoent} = Qpdf.requires_password?({:file, "/non/existent.pdf"})
+      assert {:error, _} = Qpdf.requires_password?("not a pdf")
+      assert {:error, _} = Qpdf.password_valid?("not a pdf", "secret")
+    end
+  end
+
+  describe "encryption_info/1 and encryption_info/2" do
+    test "returns encrypted: false for unencrypted PDF", %{
+      pdf_binary: pdf_binary,
+      pdf_file: pdf_file
+    } do
+      assert {:ok, %{encrypted: false}} = Qpdf.encryption_info(pdf_binary)
+      assert {:ok, %{encrypted: false}} = Qpdf.encryption_info({:file, pdf_file})
+    end
+
+    test "extracts encryption parameters for encrypted PDF", %{pdf_binary: pdf_binary} do
+      {:ok, enc} =
+        Qpdf.encrypt(pdf_binary,
+          user_password: "open_user",
+          owner_password: "admin_owner",
+          key_length: 256,
+          print: :low,
+          modify: :form,
+          extract: false,
+          annotate: true
+        )
+
+      # Without password
+      assert {:ok, info} = Qpdf.encryption_info(enc)
+      assert info.encrypted == true
+      assert info.r == 6
+      assert is_integer(info.p)
+      assert info.stream_method =~ "AES"
+      assert info.permissions.extract == false
+      assert info.permissions.extract_accessibility == true
+      assert info.permissions.print_low == true
+      assert info.permissions.print_high == false
+      assert info.permissions.modify_forms == true
+      assert info.permissions.modify_assembly == true
+      assert info.permissions.modify_annotations == true
+      assert info.password_matched == nil
+
+      # With matching user password
+      assert {:ok, user_info} = Qpdf.encryption_info(enc, password: "open_user")
+      assert user_info.password_matched == :user
+      assert user_info.user_password == "open_user"
+
+      # With matching owner password
+      assert {:ok, owner_info} = Qpdf.encryption_info(enc, password: "admin_owner")
+      assert owner_info.password_matched == :owner
+    end
+
+    test "works with {:file, path}", %{pdf_binary: pdf_binary} do
+      {:ok, enc} = Qpdf.encrypt(pdf_binary, user_password: "file_pw")
+
+      tmp_enc =
+        Path.join(
+          System.tmp_dir!(),
+          "enc_info_#{Base.encode16(:crypto.strong_rand_bytes(4))}.pdf"
+        )
+
+      File.write!(tmp_enc, enc)
+
+      try do
+        assert {:ok, info} = Qpdf.encryption_info({:file, tmp_enc}, password: "file_pw")
+        assert info.encrypted == true
+        assert info.password_matched == :user
+      after
+        File.rm(tmp_enc)
+      end
+    end
+
+    test "returns errors for invalid input" do
+      assert {:error, :invalid_input} = Qpdf.encryption_info(12_345)
+      assert {:error, :enoent} = Qpdf.encryption_info({:file, "/non/existent.pdf"})
+      assert {:error, _} = Qpdf.encryption_info("not a pdf")
+    end
+  end
+
   defp page_count!(binary) do
     {:ok, count} = Qpdf.page_count(binary)
     count

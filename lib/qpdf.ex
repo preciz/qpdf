@@ -414,6 +414,46 @@ defmodule Qpdf do
   def compress(input, opts \\ []), do: optimize(input, opts)
 
   @doc """
+  Optimizes raster images within a PDF document using DCT (JPEG) compression.
+
+  Combines `qpdf --optimize-images` with optional filtering by image dimensions,
+  JPEG quality levels, inline image handling, and unreferenced resource cleanup.
+
+  Outputs the optimized PDF directly to standard output or a destination file.
+
+  ## Options
+    * `:jpeg_quality` - integer from `0` (lowest) to `100` (highest)
+    * `:min_width` - minimum image width in pixels to optimize
+    * `:min_height` - minimum image height in pixels to optimize
+    * `:min_area` - minimum image area (width * height in pixels) to optimize
+    * `:keep_inline_images` - boolean, if `true`, exclude inline images from optimization (default `false`)
+    * `:externalize_inline_images` - boolean, convert inline images to regular image objects (default `false`)
+    * `:remove_unreferenced` - boolean, remove unreferenced fonts/images from page resource dictionaries (default `false`)
+    * `:into` - destination: `:memory` (default) or `path` / `{:file, path}`
+
+  ## Examples
+
+      # Basic image optimization
+      {:ok, optimized_pdf} = Qpdf.optimize_images(pdf)
+
+      # Target images with quality and minimum area thresholds
+      {:ok, compact_pdf} = Qpdf.optimize_images(pdf,
+        jpeg_quality: 80,
+        min_area: 10_000,
+        remove_unreferenced: true,
+        into: "compact.pdf"
+      )
+  """
+  @spec optimize_images(input(), keyword()) :: {:ok, binary() | Path.t()} | {:error, any()}
+  def optimize_images(input, opts \\ []) do
+    with_input_path(input, fn in_file ->
+      opt_args = build_image_optimize_args(opts)
+      args = [in_file | @default_opts] ++ opt_args
+      run_qpdf_into(args, opts)
+    end)
+  end
+
+  @doc """
   Encrypts a PDF document with password protection and access permissions.
 
   Outputs the encrypted PDF directly to standard output without intermediate disk files.
@@ -470,6 +510,101 @@ defmodule Qpdf do
 
       args = password_args ++ [in_file, "--no-warn", "--warning-exit-0", "--decrypt"]
       run_qpdf_into(args, opts)
+    end)
+  end
+
+  @doc """
+  Checks whether the given password is valid to open the encrypted PDF.
+
+  Uses `qpdf --requires-password`.
+  Returns `true` if the password is valid (user or owner password),
+  or `false` if the password is wrong or the document is not encrypted.
+
+  ## Parameters
+    - `input`: The PDF as a binary or `{:file, path}`
+    - `password`: The password string to test
+
+  ## Examples
+
+      Qpdf.password_valid?(pdf, "secret") #=> true
+      Qpdf.password_valid?(pdf, "wrong")  #=> false
+  """
+  @spec password_valid?(input(), String.t()) :: boolean() | {:error, any()}
+  def password_valid?(input, password) when is_binary(password) do
+    with_input_path(input, fn in_file ->
+      case run_qpdf(["--no-warn", "--password=#{password}", "--requires-password", in_file]) do
+        {_, 3} -> true
+        {"", 0} -> false
+        {"", 2} -> false
+        other -> {:error, other}
+      end
+    end)
+  end
+
+  def password_valid?(_input, _password), do: {:error, :invalid_password}
+
+  @doc """
+  Checks whether the given PDF requires a password to open.
+
+  Returns `true` if a user password is required to open the document,
+  or `false` if the document is unencrypted or opens with an empty user password.
+
+  ## Examples
+
+      Qpdf.requires_password?(pdf) #=> true | false
+  """
+  @spec requires_password?(input()) :: boolean() | {:error, any()}
+  def requires_password?(input) do
+    with_input_path(input, fn in_file ->
+      case run_qpdf(["--no-warn", "--requires-password", in_file]) do
+        {"", 0} -> true
+        {"", 2} -> false
+        {_, 3} -> false
+        other -> {:error, other}
+      end
+    end)
+  end
+
+  @doc """
+  Returns detailed encryption parameters, cipher methods, and access permissions for a PDF.
+
+  Uses `qpdf --show-encryption`.
+  Returns `{:ok, %{encrypted: false}}` if the document is not encrypted.
+  If encrypted, returns `{:ok, map()}` with encryption revision (`:r`), permission integer (`:p`),
+  cipher methods (`:stream_method`, `:string_method`, `:file_method`), permissions map,
+  and password details if supplied or recoverable.
+
+  ## Options
+    * `:password` - optional password to test against the document
+
+  ## Examples
+
+      # Inspect an encrypted PDF
+      {:ok, info} = Qpdf.encryption_info(pdf)
+      info.encrypted     #=> true
+      info.r             #=> 6 (Revision)
+      info.stream_method #=> "AESv3"
+      info.permissions.print_high #=> false
+
+      # Test password type
+      {:ok, info} = Qpdf.encryption_info(pdf, password: "admin")
+      info.password_matched #=> :owner
+  """
+  @spec encryption_info(input(), keyword()) :: {:ok, map()} | {:error, any()}
+  def encryption_info(input, opts \\ []) do
+    with_input_path(input, fn in_file ->
+      pass_arg =
+        case Keyword.get(opts, :password) do
+          nil -> []
+          pass -> ["--password=#{pass}"]
+        end
+
+      args = ["--no-warn"] ++ pass_arg ++ ["--show-encryption", in_file]
+
+      case run_qpdf(args) do
+        {output, 0} -> parse_encryption_info(output)
+        other -> {:error, other}
+      end
     end)
   end
 
@@ -864,6 +999,101 @@ defmodule Qpdf do
   defp object_streams_arg(:preserve), do: ["--object-streams=preserve"]
   defp object_streams_arg(:disable), do: ["--object-streams=disable"]
   defp object_streams_arg(_generate), do: ["--object-streams=generate"]
+
+  defp build_image_optimize_args(opts) do
+    [
+      ["--optimize-images"],
+      jpeg_quality_arg(Keyword.get(opts, :jpeg_quality)),
+      min_dimension_arg("--oi-min-width", Keyword.get(opts, :min_width)),
+      min_dimension_arg("--oi-min-height", Keyword.get(opts, :min_height)),
+      min_dimension_arg("--oi-min-area", Keyword.get(opts, :min_area)),
+      if(Keyword.get(opts, :keep_inline_images), do: ["--keep-inline-images"], else: []),
+      if(Keyword.get(opts, :externalize_inline_images),
+        do: ["--externalize-inline-images"],
+        else: []
+      ),
+      if(Keyword.get(opts, :remove_unreferenced),
+        do: ["--remove-unreferenced-resources=yes"],
+        else: []
+      )
+    ]
+    |> List.flatten()
+  end
+
+  defp jpeg_quality_arg(quality) when is_integer(quality) and quality in 0..100 do
+    ["--jpeg-quality=#{quality}"]
+  end
+
+  defp jpeg_quality_arg(_), do: []
+
+  defp min_dimension_arg(flag, val) when is_integer(val) and val > 0 do
+    ["#{flag}=#{val}"]
+  end
+
+  defp min_dimension_arg(_flag, _), do: []
+
+  defp parse_encryption_info(output) do
+    if String.contains?(output, "File is not encrypted") do
+      {:ok, %{encrypted: false}}
+    else
+      {:ok, build_encryption_map(output)}
+    end
+  end
+
+  defp build_encryption_map(output) do
+    %{
+      encrypted: true,
+      r: parse_int_regex(output, ~r/^R\s*=\s*(\d+)/m),
+      p: parse_int_regex(output, ~r/^P\s*=\s*(-?\d+)/m),
+      v: parse_int_regex(output, ~r/^V\s*=\s*(\d+)/m),
+      user_password: parse_string_regex(output, ~r/^User password\s*=\s*(.*)$/m),
+      password_matched: parse_password_matched(output),
+      stream_method: parse_string_regex(output, ~r/^stream encryption method:\s*(.*)$/m),
+      string_method: parse_string_regex(output, ~r/^string encryption method:\s*(.*)$/m),
+      file_method: parse_string_regex(output, ~r/^file encryption method:\s*(.*)$/m),
+      permissions: parse_encryption_permissions(output)
+    }
+  end
+
+  defp parse_int_regex(text, regex) do
+    case Regex.run(regex, text) do
+      [_, val] -> String.to_integer(val)
+      _ -> nil
+    end
+  end
+
+  defp parse_string_regex(text, regex) do
+    case Regex.run(regex, text) do
+      [_, val] ->
+        trimmed = String.trim(val)
+        if trimmed == "", do: nil, else: trimmed
+
+      _ ->
+        nil
+    end
+  end
+
+  defp parse_password_matched(output) do
+    cond do
+      String.contains?(output, "Supplied password is user password") -> :user
+      String.contains?(output, "Supplied password is owner password") -> :owner
+      true -> nil
+    end
+  end
+
+  defp parse_encryption_permissions(output) do
+    %{
+      extract: String.contains?(output, "extract for any purpose: allowed"),
+      extract_accessibility: String.contains?(output, "extract for accessibility: allowed"),
+      print_low: String.contains?(output, "print low resolution: allowed"),
+      print_high: String.contains?(output, "print high resolution: allowed"),
+      modify_assembly: String.contains?(output, "modify document assembly: allowed"),
+      modify_forms: String.contains?(output, "modify forms: allowed"),
+      modify_annotations: String.contains?(output, "modify annotations: allowed"),
+      modify_other: String.contains?(output, "modify other: allowed"),
+      modify_anything: String.contains?(output, "modify anything: allowed")
+    }
+  end
 
   defp list_page_files(dir) do
     dir

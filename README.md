@@ -112,6 +112,13 @@ IO.puts("Total pages: #{count}")
   recompress_flate: true
 )
 
+# Optimize raster images with DCT (JPEG) recompression
+{:ok, image_optimized} = Qpdf.optimize_images(pdf_file,
+  jpeg_quality: 80,
+  min_area: 10_000,
+  remove_unreferenced: true
+)
+
 # 6. Embedded Files and Attachments (Factur-X / ZUGFeRD)
 # Embed an electronic invoice XML
 {:ok, with_invoice} = Qpdf.add_attachment(pdf_file, xml_data,
@@ -161,6 +168,17 @@ true = Qpdf.linearized?(web_pdf)
   extract: false
 )
 {:ok, plain_pdf} = Qpdf.decrypt(secure_pdf, password: "open")
+
+# Validate passwords and check if password is required
+true = Qpdf.requires_password?(secure_pdf)
+true = Qpdf.password_valid?(secure_pdf, "open")
+false = Qpdf.password_valid?(secure_pdf, "wrong")
+
+# Inspect detailed encryption parameters (cipher, revision, permission flags)
+{:ok, enc_info} = Qpdf.encryption_info(secure_pdf)
+IO.inspect(enc_info.r)             # => 6
+IO.inspect(enc_info.stream_method) # => "AESv3"
+IO.inspect(enc_info.permissions.print_high) # => false
 
 # 11. Extract document metadata, outlines, and structural tree as JSON map
 {:ok, metadata} = Qpdf.json(pdf_file)
