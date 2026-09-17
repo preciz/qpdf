@@ -112,6 +112,43 @@ defmodule Qpdf do
   end
 
   @doc """
+  Rotates pages in a PDF by a specified angle.
+
+  The angle must be a multiple of 90 (e.g. `90`, `180`, `270`, `-90`).
+  By default, all pages are rotated. A specific page, range, or page specification
+  can optionally be provided.
+
+  Outputs the rotated PDF directly to standard output without intermediate disk files.
+
+  ## Examples
+
+      # Rotate all pages 90 degrees clockwise
+      {:ok, rotated} = Qpdf.rotate(input, 90)
+
+      # Rotate only page 2 by 180 degrees
+      {:ok, rotated} = Qpdf.rotate(input, 180, 2)
+
+      # Rotate a range of pages
+      {:ok, rotated} = Qpdf.rotate(input, 90, 1..5)
+  """
+  @spec rotate(input(), integer() | String.t(), any()) ::
+          {:ok, binary()} | {:error, any()}
+  def rotate(input, angle, page_spec \\ :all) do
+    with_input_path(input, fn in_file ->
+      rotate_arg = format_rotate_arg(angle, page_spec)
+
+      args =
+        [in_file | @default_opts] ++
+          [rotate_arg, "--", "-"]
+
+      case run_qpdf(args) do
+        {output, 0} -> {:ok, output}
+        other -> {:error, other}
+      end
+    end)
+  end
+
+  @doc """
   Splits a PDF into pages or consecutive groups of pages.
 
   Defaults to splitting into individual single-page documents (`pages_per_group: 1`).
@@ -307,6 +344,14 @@ defmodule Qpdf do
   defp format_page_spec(%Range{first: first, last: last}), do: "#{first}-#{last}"
   defp format_page_spec(pages) when is_list(pages), do: Enum.join(pages, ",")
   defp format_page_spec(spec), do: to_string(spec)
+
+  defp format_rotate_arg(angle, spec) when spec in [:all, nil] do
+    "--rotate=#{angle}"
+  end
+
+  defp format_rotate_arg(angle, spec) do
+    "--rotate=#{angle}:#{format_page_spec(spec)}"
+  end
 
   defp list_page_files(dir) do
     dir

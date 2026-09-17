@@ -102,6 +102,38 @@ defmodule QpdfTest do
     end
   end
 
+  describe "rotate/2 and rotate/3" do
+    test "rotates all pages by 90 degrees", %{pdf_binary: pdf_binary} do
+      {:ok, rotated} = Qpdf.rotate(pdf_binary, 90)
+      assert page_count!(rotated) == 14
+      assert :ok = Qpdf.check(rotated)
+    end
+
+    test "rotates a specific page by 180 degrees", %{pdf_binary: pdf_binary} do
+      {:ok, rotated} = Qpdf.rotate(pdf_binary, 180, 2)
+      assert page_count!(rotated) == 14
+      assert :ok = Qpdf.check(rotated)
+    end
+
+    test "rotates a page range with {:file, path}", %{pdf_file: pdf_file} do
+      {:ok, rotated} = Qpdf.rotate({:file, pdf_file}, 270, 1..3)
+      assert page_count!(rotated) == 14
+      assert :ok = Qpdf.check(rotated)
+    end
+
+    test "returns :enoent for non-existent file" do
+      assert {:error, :enoent} = Qpdf.rotate({:file, "/non/existent.pdf"}, 90)
+    end
+
+    test "returns :invalid_input for invalid input type" do
+      assert {:error, :invalid_input} = Qpdf.rotate(12345, 90)
+    end
+
+    test "returns error for invalid rotation angle", %{pdf_binary: pdf_binary} do
+      assert {:error, _} = Qpdf.rotate(pdf_binary, 45)
+    end
+  end
+
   describe "split_pages/2" do
     test "splits into individual pages by default", %{pdf_binary: pdf_binary} do
       {:ok, pages} = Qpdf.split_pages(pdf_binary)
