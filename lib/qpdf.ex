@@ -929,7 +929,11 @@ defmodule Qpdf do
     Application.get_env(:qpdf, :tmp_dir) || System.tmp_dir!()
   end
 
-  defp format_page_spec(%Range{first: first, last: last}), do: "#{first}-#{last}"
+  defp format_page_spec(%Range{first: first, last: last, step: step}) when step in [1, -1] do
+    "#{first}-#{last}"
+  end
+
+  defp format_page_spec(%Range{} = range), do: Enum.join(range, ",")
   defp format_page_spec(pages) when is_list(pages), do: Enum.join(pages, ",")
   defp format_page_spec(spec), do: to_string(spec)
 

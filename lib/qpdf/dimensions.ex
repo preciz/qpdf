@@ -162,14 +162,24 @@ defmodule Qpdf.Dimensions do
   end
 
   defp filter_dimensions(all_dims, %Range{} = range) do
-    selected = Enum.filter(all_dims, &(&1.page in range))
-    {:ok, selected}
+    {:ok, filter_by_page_sequence(all_dims, range)}
   end
 
   defp filter_dimensions(all_dims, pages) when is_list(pages) do
-    selected = Enum.filter(all_dims, &(&1.page in pages))
-    {:ok, selected}
+    {:ok, filter_by_page_sequence(all_dims, pages)}
   end
 
   defp filter_dimensions(_all_dims, _other), do: {:error, :invalid_page_spec}
+
+  defp filter_by_page_sequence(all_dims, sequence) do
+    dim_map = Map.new(all_dims, fn dim -> {dim.page, dim} end)
+
+    Enum.reduce(sequence, [], fn page_num, acc ->
+      case Map.get(dim_map, page_num) do
+        nil -> acc
+        dim -> [dim | acc]
+      end
+    end)
+    |> Enum.reverse()
+  end
 end

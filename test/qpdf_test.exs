@@ -37,6 +37,13 @@ defmodule QpdfTest do
     test "extracts a page range with Range struct", %{pdf_binary: pdf_binary} do
       {:ok, chunk} = Qpdf.pages(pdf_binary, 1..3)
       assert page_count!(chunk) == 3
+
+      # Stepped ranges
+      {:ok, stepped} = Qpdf.pages(pdf_binary, 1..5//2)
+      assert page_count!(stepped) == 3
+
+      {:ok, rev_stepped} = Qpdf.pages(pdf_binary, 5..1//-2)
+      assert page_count!(rev_stepped) == 3
     end
 
     test "extracts pages with list", %{pdf_binary: pdf_binary} do
@@ -853,6 +860,12 @@ defmodule QpdfTest do
       assert {:ok, list_dims} = Qpdf.dimensions(pdf_binary, [1, 5, 10])
       assert length(list_dims) == 3
       assert Enum.map(list_dims, & &1.page) == [1, 5, 10]
+
+      assert {:ok, stepped_dims} = Qpdf.dimensions(pdf_binary, 1..5//2)
+      assert Enum.map(stepped_dims, & &1.page) == [1, 3, 5]
+
+      assert {:ok, rev_dims} = Qpdf.dimensions(pdf_binary, 5..1//-2)
+      assert Enum.map(rev_dims, & &1.page) == [5, 3, 1]
     end
 
     test "updates dimensions and orientation when page is rotated", %{pdf_binary: pdf_binary} do

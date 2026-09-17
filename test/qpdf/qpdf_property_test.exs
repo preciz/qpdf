@@ -25,6 +25,23 @@ defmodule Qpdf.QpdfPropertyTest do
     end
   end
 
+  property "page_count equals range element count for any stepped range", %{pdf: pdf} do
+    check all(
+            a <- integer(1..14),
+            b <- integer(1..14),
+            step <- filter(integer(-3..3), &(&1 != 0)),
+            max_runs: 25
+          ) do
+      range = Range.new(a, b, step)
+      expected_count = Enum.count(range)
+
+      if expected_count > 0 do
+        assert {:ok, slice} = Qpdf.pages(pdf, range)
+        assert Qpdf.page_count(slice) == {:ok, expected_count}
+      end
+    end
+  end
+
   property "arbitrary page lists always produce exact page counts", %{pdf: pdf} do
     check all(
             page_list <- list_of(integer(1..14), min_length: 1, max_length: 10),
