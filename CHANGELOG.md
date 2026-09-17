@@ -19,9 +19,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Concurrency-safe installer with re-entrant `:global` transaction locking.
 - Strict TLS peer verification with OS root CA trust store during AppImage downloads.
 - Comprehensive PDF operations:
-  - Page selection, range slicing, and extraction (`pages/2,3`, `page/2,3`).
+  - Page selection, range slicing, and extraction (`pages/2,3`).
   - Document merging with per-file page selections (`merge/2`).
-  - Document splitting into single pages or page chunks (`split_pages/2,3`, `split/1,2`).
+  - Document splitting into single pages or page chunks (`split_pages/2,3`).
   - Watermarks, stamps, and letterheads (`overlay/3`, `underlay/3`).
   - File size and stream optimization (`optimize/2`, `optimize_images/2`, `linearize/2`).
   - Attachment embedding and extraction (Factur-X / ZUGFeRD e-invoices, XML, CSV).

@@ -212,16 +212,6 @@ IO.inspect(sizes) # e.g., [12345, 67890, ...]
 IO.puts("Running qpdf #{version}")
 ```
 
-## Backward Compatibility
-
-Convenience aliases and delegates are available across the API:
-- `Qpdf.page/2,3` delegates to `Qpdf.pages/3`.
-- `Qpdf.split/1,2` delegates to `Qpdf.split_pages/3` and returns `{:ok, [{page_number, page_output}]}`.
-- `Qpdf.split_groups/2,3` delegates to `Qpdf.split_pages/3`.
-- `Qpdf.show_npages/1` is an alias for `Qpdf.page_count/1`.
-- `Qpdf.metadata/1,2` is an alias for `Qpdf.json/1,2`.
-- `Qpdf.compress/1,2` is an alias for `Qpdf.optimize/1,2`.
-
 ## Running Tests
 
 To run the test suite:

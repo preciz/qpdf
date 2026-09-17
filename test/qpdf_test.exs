@@ -18,12 +18,12 @@ defmodule QpdfTest do
     %{pdf_binary: pdf_binary, pdf_file: pdf_file}
   end
 
-  describe "pages/2 and page/2" do
+  describe "pages/2,3" do
     test "extracts a single page with integer", %{pdf_binary: pdf_binary} do
       {:ok, page_binary} = Qpdf.pages(pdf_binary, 1)
       assert page_count!(page_binary) == 1
 
-      {:ok, page14_binary} = Qpdf.page(pdf_binary, 14)
+      {:ok, page14_binary} = Qpdf.pages(pdf_binary, 14)
       assert page_count!(page14_binary) == 1
     end
 
@@ -57,7 +57,7 @@ defmodule QpdfTest do
       {:ok, page_binary} = Qpdf.pages({:file, pdf_file}, 1)
       assert page_count!(page_binary) == 1
 
-      {:ok, range_binary} = Qpdf.page({:file, pdf_file}, 1..3)
+      {:ok, range_binary} = Qpdf.pages({:file, pdf_file}, 1..3)
       assert page_count!(range_binary) == 3
     end
 
@@ -209,40 +209,13 @@ defmodule QpdfTest do
     end
   end
 
-  describe "split/1 and split_groups/2 (backward compatibility)" do
-    test "split/1 returns tagged tuples", %{pdf_binary: pdf_binary} do
-      {:ok, pages} = Qpdf.split(pdf_binary)
-      assert length(pages) == 14
-      assert {1, _page1} = List.first(pages)
-      assert {14, _page14} = List.last(pages)
-    end
-
-    test "split/1 with {:file, path}", %{pdf_file: pdf_file} do
-      {:ok, pages} = Qpdf.split({:file, pdf_file})
-      assert length(pages) == 14
-      assert {1, _page1} = List.first(pages)
-      assert {14, _page14} = List.last(pages)
-    end
-
-    test "split/1 returns error for non-PDF input" do
-      assert {:error, _} = Qpdf.split("not a pdf")
-    end
-
-    test "split_groups/2 delegates to split_pages/2", %{pdf_binary: pdf_binary} do
-      {:ok, groups} = Qpdf.split_groups(pdf_binary, 5)
-      assert [5, 5, 4] == Enum.map(groups, &page_count!/1)
-    end
-  end
-
-  describe "page_count/1 and show_npages/1" do
+  describe "page_count/1" do
     test "returns the page count without splitting the PDF", %{pdf_binary: pdf_binary} do
       assert {:ok, 14} = Qpdf.page_count(pdf_binary)
-      assert {:ok, 14} = Qpdf.show_npages(pdf_binary)
     end
 
     test "returns the page count with {:file, path}", %{pdf_file: pdf_file} do
       assert {:ok, 14} = Qpdf.page_count({:file, pdf_file})
-      assert {:ok, 14} = Qpdf.show_npages({:file, pdf_file})
     end
 
     test "returns :enoent for non-existent file" do
@@ -329,10 +302,6 @@ defmodule QpdfTest do
       assert byte_size(opt) < byte_size(pdf_binary)
       assert page_count!(opt) == 14
       assert :ok = Qpdf.check(opt)
-
-      {:ok, comp} = Qpdf.compress(pdf_binary)
-      assert byte_size(comp) < byte_size(pdf_binary)
-      assert page_count!(comp) == 14
     end
 
     test "optimizes with options", %{pdf_binary: pdf_binary} do
@@ -372,12 +341,10 @@ defmodule QpdfTest do
 
     test "returns :enoent for non-existent file" do
       assert {:error, :enoent} = Qpdf.optimize({:file, "/non/existent.pdf"})
-      assert {:error, :enoent} = Qpdf.compress({:file, "/non/existent.pdf"})
     end
 
     test "returns :invalid_input for invalid input" do
       assert {:error, :invalid_input} = Qpdf.optimize(12_345)
-      assert {:error, :invalid_input} = Qpdf.compress(12_345)
     end
   end
 
@@ -467,9 +434,6 @@ defmodule QpdfTest do
       assert Map.has_key?(data, "version")
       assert Map.has_key?(data, "pages")
       assert length(data["pages"]) == 14
-
-      {:ok, meta} = Qpdf.metadata(pdf_binary)
-      assert meta == data
     end
 
     test "decodes JSON structure with {:file, path}", %{pdf_file: pdf_file} do
@@ -480,12 +444,10 @@ defmodule QpdfTest do
 
     test "returns :enoent for non-existent file" do
       assert {:error, :enoent} = Qpdf.json({:file, "/non/existent.pdf"})
-      assert {:error, :enoent} = Qpdf.metadata({:file, "/non/existent.pdf"})
     end
 
     test "returns :invalid_input for invalid input" do
       assert {:error, :invalid_input} = Qpdf.json(12_345)
-      assert {:error, :invalid_input} = Qpdf.metadata(12_345)
     end
 
     test "returns error for non-PDF input" do
@@ -552,7 +514,7 @@ defmodule QpdfTest do
       assert File.exists?(dest1)
       assert page_count!({:file, dest1}) == 2
 
-      assert {:ok, ^dest2} = Qpdf.page({:file, pdf_file}, 1, into: {:file, dest2})
+      assert {:ok, ^dest2} = Qpdf.pages({:file, pdf_file}, 1, into: {:file, dest2})
       assert File.exists?(dest2)
       assert page_count!({:file, dest2}) == 1
     end
@@ -586,7 +548,7 @@ defmodule QpdfTest do
     end
 
     test "overlays and underlays directly to file", %{pdf_binary: pdf_binary} do
-      {:ok, page1} = Qpdf.page(pdf_binary, 1)
+      {:ok, page1} = Qpdf.pages(pdf_binary, 1)
 
       dest_ov =
         Path.join(System.tmp_dir!(), "out_ov_#{Base.encode16(:crypto.strong_rand_bytes(4))}.pdf")
@@ -671,12 +633,6 @@ defmodule QpdfTest do
       assert {:ok, groups} = Qpdf.split_pages({:file, pdf_file}, 5, into: {:dir, dest_dir2})
       assert length(groups) == 3
       assert Enum.all?(groups, &File.exists?/1)
-
-      assert {:ok, indexed} = Qpdf.split({:file, pdf_file}, into: dest_dir1)
-      assert length(indexed) == 14
-      assert [{1, file1} | _] = indexed
-      assert is_binary(file1)
-      assert File.exists?(file1)
     end
 
     test "repeated splits into the same directory return only files from current invocation", %{
@@ -893,7 +849,7 @@ defmodule QpdfTest do
     end
 
     test "detects paper size and square orientation", %{pdf_binary: pdf_binary} do
-      {:ok, page1} = Qpdf.page(pdf_binary, 1)
+      {:ok, page1} = Qpdf.pages(pdf_binary, 1)
 
       a4_pdf = :binary.replace(page1, "439.37 666.14", "595.28 841.89")
       assert {:ok, a4_dim} = Qpdf.dimensions(a4_pdf, 1)

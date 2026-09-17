@@ -69,14 +69,6 @@ defmodule Qpdf do
   end
 
   @doc """
-  Extracts a specific page or range from a PDF.
-  Delegate to `pages/3`.
-  """
-  @spec page(input(), integer() | Range.t() | list() | String.t(), keyword()) ::
-          {:ok, binary() | Path.t()} | {:error, any}
-  def page(input, page_spec, opts \\ []), do: pages(input, page_spec, opts)
-
-  @doc """
   Merges multiple PDFs into a single document.
 
   Accepts a list of inputs. Each item in the list can be:
@@ -252,39 +244,6 @@ defmodule Qpdf do
   end
 
   @doc """
-  Splits a PDF into individual pages.
-
-  Returns `{:ok, [{page_number, page_binary | file_path}]}` where page_number is an integer.
-  For a flat list of binaries without page number tuples, use `split_pages/2`.
-  """
-  @spec split(input(), keyword()) ::
-          {:ok, [{non_neg_integer, binary() | Path.t()}]} | {:error, any}
-  def split(input, opts \\ []) do
-    case split_pages(input, 1, opts) do
-      {:ok, pages} ->
-        indexed =
-          pages
-          |> Enum.with_index(1)
-          |> Enum.map(fn {page, index} -> {index, page} end)
-
-        {:ok, indexed}
-
-      error ->
-        error
-    end
-  end
-
-  @doc """
-  Splits a PDF into consecutive groups of at most `pages_per_group` pages.
-  Delegate to `split_pages/3`.
-  """
-  @spec split_groups(input(), pos_integer, keyword()) ::
-          {:ok, [binary()] | [Path.t()]} | {:error, any}
-  def split_groups(input, pages_per_group, opts \\ []) do
-    split_pages(input, pages_per_group, opts)
-  end
-
-  @doc """
   Returns the page count of a PDF without splitting it.
 
   Uses `--show-npages`, which only reads the page tree structure without writing
@@ -312,13 +271,6 @@ defmodule Qpdf do
       _ -> {:error, {:unexpected_output, output}}
     end
   end
-
-  @doc """
-  Returns the page count of a PDF.
-  Alias for `page_count/1`.
-  """
-  @spec show_npages(input()) :: {:ok, pos_integer} | {:error, any}
-  def show_npages(input), do: page_count(input)
 
   @doc """
   Checks whether the given PDF is encrypted.
@@ -412,7 +364,6 @@ defmodule Qpdf do
   ## Examples
 
       {:ok, compressed} = Qpdf.optimize(input)
-      {:ok, compressed} = Qpdf.compress(input)
   """
   @spec optimize(input(), keyword()) :: {:ok, binary() | Path.t()} | {:error, any()}
   def optimize(input, opts \\ []) do
@@ -422,13 +373,6 @@ defmodule Qpdf do
       run_qpdf_into(args, opts)
     end)
   end
-
-  @doc """
-  Compresses a PDF document to reduce file size.
-  Alias for `optimize/2`.
-  """
-  @spec compress(input(), keyword()) :: {:ok, binary() | Path.t()} | {:error, any()}
-  def compress(input, opts \\ []), do: optimize(input, opts)
 
   @doc """
   Optimizes raster images within a PDF document using DCT (JPEG) compression.
@@ -662,13 +606,6 @@ defmodule Qpdf do
       {:error, reason} -> {:error, {:invalid_json, reason}}
     end
   end
-
-  @doc """
-  Extracts document metadata and structure as a map.
-  Alias for `json/2`.
-  """
-  @spec metadata(input(), keyword()) :: {:ok, map()} | {:error, any()}
-  def metadata(input, opts \\ []), do: json(input, opts)
 
   @doc """
   Inspects page geometry, bounding boxes, dimensions, orientation, and paper size.
