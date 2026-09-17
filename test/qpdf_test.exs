@@ -319,6 +319,47 @@ defmodule QpdfTest do
     end
   end
 
+  describe "optimize/2 and compress/1" do
+    test "optimizes and compresses PDF binary", %{pdf_binary: pdf_binary} do
+      {:ok, opt} = Qpdf.optimize(pdf_binary)
+      assert byte_size(opt) < byte_size(pdf_binary)
+      assert page_count!(opt) == 14
+      assert :ok = Qpdf.check(opt)
+
+      {:ok, comp} = Qpdf.compress(pdf_binary)
+      assert byte_size(comp) < byte_size(pdf_binary)
+      assert page_count!(comp) == 14
+    end
+
+    test "optimizes with options", %{pdf_binary: pdf_binary} do
+      {:ok, opt} =
+        Qpdf.optimize(pdf_binary,
+          stream_data: :compress,
+          object_streams: :generate,
+          recompress_flate: true
+        )
+
+      assert page_count!(opt) == 14
+      assert :ok = Qpdf.check(opt)
+    end
+
+    test "optimizes with {:file, path}", %{pdf_file: pdf_file, pdf_binary: pdf_binary} do
+      {:ok, opt} = Qpdf.optimize({:file, pdf_file})
+      assert byte_size(opt) < byte_size(pdf_binary)
+      assert page_count!(opt) == 14
+    end
+
+    test "returns :enoent for non-existent file" do
+      assert {:error, :enoent} = Qpdf.optimize({:file, "/non/existent.pdf"})
+      assert {:error, :enoent} = Qpdf.compress({:file, "/non/existent.pdf"})
+    end
+
+    test "returns :invalid_input for invalid input" do
+      assert {:error, :invalid_input} = Qpdf.optimize(12345)
+      assert {:error, :invalid_input} = Qpdf.compress(12345)
+    end
+  end
+
   describe "encrypt/2 and decrypt/2" do
     test "encrypts and decrypts with passwords", %{pdf_binary: pdf_binary} do
       {:ok, enc} =

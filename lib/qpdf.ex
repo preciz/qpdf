@@ -376,6 +376,44 @@ defmodule Qpdf do
   end
 
   @doc """
+  Optimizes and compresses a PDF document to reduce file size.
+
+  Compresses uncompressed streams, generates object streams (packing objects into
+  compressed stream containers), and recompresses Flate streams.
+
+  Outputs the optimized PDF directly to standard output without intermediate disk files.
+
+  ## Options
+    * `:stream_data` - `:compress` (default), `:uncompress`, or `:preserve`
+    * `:object_streams` - `:generate` (default), `:preserve`, or `:disable`
+    * `:recompress_flate` - boolean, whether to recompress flate streams (default: `true`)
+
+  ## Examples
+
+      {:ok, compressed} = Qpdf.optimize(input)
+      {:ok, compressed} = Qpdf.compress(input)
+  """
+  @spec optimize(input(), keyword()) :: {:ok, binary()} | {:error, any()}
+  def optimize(input, opts \\ []) do
+    with_input_path(input, fn in_file ->
+      opt_args = build_optimize_args(opts)
+      args = [in_file | @default_opts] ++ opt_args ++ ["--", "-"]
+
+      case run_qpdf(args) do
+        {output, 0} -> {:ok, output}
+        other -> {:error, other}
+      end
+    end)
+  end
+
+  @doc """
+  Compresses a PDF document to reduce file size.
+  Alias for `optimize/2`.
+  """
+  @spec compress(input(), keyword()) :: {:ok, binary()} | {:error, any()}
+  def compress(input, opts \\ []), do: optimize(input, opts)
+
+  @doc """
   Encrypts a PDF document with password protection and access permissions.
 
   Outputs the encrypted PDF directly to standard output without intermediate disk files.
@@ -605,6 +643,29 @@ defmodule Qpdf do
       end)
 
     ["--encrypt"] ++ pass_args ++ ["--bits=#{bits}"] ++ insecure_arg ++ permission_args
+  end
+
+  defp build_optimize_args(opts) do
+    stream_arg =
+      case Keyword.get(opts, :stream_data, :compress) do
+        :compress -> ["--stream-data=compress"]
+        :uncompress -> ["--stream-data=uncompress"]
+        :preserve -> ["--stream-data=preserve"]
+        _ -> ["--stream-data=compress"]
+      end
+
+    object_arg =
+      case Keyword.get(opts, :object_streams, :generate) do
+        :generate -> ["--object-streams=generate"]
+        :preserve -> ["--object-streams=preserve"]
+        :disable -> ["--object-streams=disable"]
+        _ -> ["--object-streams=generate"]
+      end
+
+    flate_arg =
+      if Keyword.get(opts, :recompress_flate, true), do: ["--recompress-flate"], else: []
+
+    stream_arg ++ object_arg ++ flate_arg
   end
 
   defp list_page_files(dir) do
