@@ -258,18 +258,14 @@ defmodule Qpdf.Installer do
   end
 
   defp fetch_file(url, destination) do
-    ssl_opts =
-      if function_exported?(:public_key, :cacerts_get, 0) do
-        [
-          verify: :verify_peer,
-          cacerts: :public_key.cacerts_get(),
-          customize_hostname_check: [
-            match_fun: :public_key.pkix_verify_hostname_match_fun(:https)
-          ]
-        ]
-      else
-        [verify: :verify_none]
-      end
+    ssl_opts = [
+      verify: :verify_peer,
+      cacerts: :public_key.cacerts_get(),
+      depth: 3,
+      customize_hostname_check: [
+        match_fun: :public_key.pkix_verify_hostname_match_fun(:https)
+      ]
+    ]
 
     http_opts = [autoredirect: true, ssl: ssl_opts]
     request = {String.to_charlist(url), []}

@@ -424,6 +424,71 @@ defmodule Qpdf.InstallerTest do
     end
   end
 
+  test "fetch_file enforces strict TLS peer verification against self-signed certificates" do
+    if System.find_executable("openssl") do
+      tmp = System.tmp_dir!()
+      suffix = Base.encode16(:crypto.strong_rand_bytes(4))
+      key_path = Path.join(tmp, "test_key_#{suffix}.pem")
+      cert_path = Path.join(tmp, "test_cert_#{suffix}.pem")
+
+      System.cmd("openssl", [
+        "req",
+        "-x509",
+        "-newkey",
+        "rsa:2048",
+        "-nodes",
+        "-keyout",
+        key_path,
+        "-out",
+        cert_path,
+        "-days",
+        "1",
+        "-subj",
+        "/CN=127.0.0.1"
+      ])
+
+      Application.ensure_all_started(:ssl)
+
+      {:ok, listen} =
+        :ssl.listen(0,
+          certfile: String.to_charlist(cert_path),
+          keyfile: String.to_charlist(key_path),
+          reuseaddr: true,
+          active: false
+        )
+
+      {:ok, {_, port}} = :ssl.sockname(listen)
+
+      spawn_link(fn ->
+        case :ssl.transport_accept(listen, 5000) do
+          {:ok, socket} ->
+            :ssl.handshake(socket, 5000)
+            :ssl.close(socket)
+
+          _ ->
+            :ok
+        end
+
+        :ssl.close(listen)
+      end)
+
+      test_version = "mock-ssl-#{suffix}"
+
+      try do
+        assert {:error, {:download_failed, _reason}} =
+                 Installer.install(
+                   url: "https://127.0.0.1:#{port}/malicious.AppImage",
+                   version: test_version
+                 )
+      after
+        File.rm(key_path)
+        File.rm(cert_path)
+        :ssl.close(listen)
+        File.rm_rf(Installer.storage_dir(test_version))
+      end
+    end
+  end
+
   defp start_mock_server(handler) do
     {:ok, listen_socket} =
       :gen_tcp.listen(0, [:binary, packet: :raw, active: false, reuseaddr: true])
