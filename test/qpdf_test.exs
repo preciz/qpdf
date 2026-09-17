@@ -66,7 +66,7 @@ defmodule QpdfTest do
     end
 
     test "returns :invalid_input for invalid input type" do
-      assert {:error, :invalid_input} = Qpdf.pages(12345, 1)
+      assert {:error, :invalid_input} = Qpdf.pages(12_345, 1)
     end
   end
 
@@ -98,7 +98,7 @@ defmodule QpdfTest do
     end
 
     test "returns :invalid_input for invalid items" do
-      assert {:error, :invalid_input} = Qpdf.merge([12345])
+      assert {:error, :invalid_input} = Qpdf.merge([12_345])
     end
   end
 
@@ -126,7 +126,7 @@ defmodule QpdfTest do
     end
 
     test "returns :invalid_input for invalid input type" do
-      assert {:error, :invalid_input} = Qpdf.rotate(12345, 90)
+      assert {:error, :invalid_input} = Qpdf.rotate(12_345, 90)
     end
 
     test "returns error for invalid rotation angle", %{pdf_binary: pdf_binary} do
@@ -174,8 +174,8 @@ defmodule QpdfTest do
     end
 
     test "returns :invalid_input for invalid input" do
-      assert {:error, :invalid_input} = Qpdf.overlay(12345, "binary")
-      assert {:error, :invalid_input} = Qpdf.underlay("binary", 12345)
+      assert {:error, :invalid_input} = Qpdf.overlay(12_345, "binary")
+      assert {:error, :invalid_input} = Qpdf.underlay("binary", 12_345)
     end
   end
 
@@ -318,8 +318,8 @@ defmodule QpdfTest do
     end
 
     test "returns :invalid_input for invalid input" do
-      assert {:error, :invalid_input} = Qpdf.linearized?(12345)
-      assert {:error, :invalid_input} = Qpdf.linearize(12345)
+      assert {:error, :invalid_input} = Qpdf.linearized?(12_345)
+      assert {:error, :invalid_input} = Qpdf.linearize(12_345)
     end
   end
 
@@ -376,8 +376,8 @@ defmodule QpdfTest do
     end
 
     test "returns :invalid_input for invalid input" do
-      assert {:error, :invalid_input} = Qpdf.optimize(12345)
-      assert {:error, :invalid_input} = Qpdf.compress(12345)
+      assert {:error, :invalid_input} = Qpdf.optimize(12_345)
+      assert {:error, :invalid_input} = Qpdf.compress(12_345)
     end
   end
 
@@ -455,8 +455,8 @@ defmodule QpdfTest do
     end
 
     test "returns :invalid_input for invalid input" do
-      assert {:error, :invalid_input} = Qpdf.encrypt(12345)
-      assert {:error, :invalid_input} = Qpdf.decrypt(12345)
+      assert {:error, :invalid_input} = Qpdf.encrypt(12_345)
+      assert {:error, :invalid_input} = Qpdf.decrypt(12_345)
     end
   end
 
@@ -484,8 +484,8 @@ defmodule QpdfTest do
     end
 
     test "returns :invalid_input for invalid input" do
-      assert {:error, :invalid_input} = Qpdf.json(12345)
-      assert {:error, :invalid_input} = Qpdf.metadata(12345)
+      assert {:error, :invalid_input} = Qpdf.json(12_345)
+      assert {:error, :invalid_input} = Qpdf.metadata(12_345)
     end
 
     test "returns error for non-PDF input" do
@@ -776,12 +776,12 @@ defmodule QpdfTest do
     end
 
     test "returns errors for invalid attachments or paths", %{pdf_binary: pdf_binary} do
-      assert {:error, :invalid_attachment} = Qpdf.add_attachment(pdf_binary, 12345)
+      assert {:error, :invalid_attachment} = Qpdf.add_attachment(pdf_binary, 12_345)
 
       assert {:error, :enoent} =
                Qpdf.add_attachment(pdf_binary, {:file, "/non/existent/file.txt"})
 
-      assert {:error, :invalid_input} = Qpdf.add_attachment(12345, "content")
+      assert {:error, :invalid_input} = Qpdf.add_attachment(12_345, "content")
       assert {:error, _} = Qpdf.attachments("not a pdf")
     end
   end

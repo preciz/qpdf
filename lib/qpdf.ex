@@ -283,16 +283,17 @@ defmodule Qpdf do
       args = @default_opts ++ ["--show-npages", in_file]
 
       case run_qpdf(args) do
-        {output, 0} ->
-          case output |> String.trim() |> Integer.parse() do
-            {count, ""} when count > 0 -> {:ok, count}
-            _ -> {:error, {:unexpected_output, output}}
-          end
-
-        other ->
-          {:error, other}
+        {output, 0} -> parse_page_count(output)
+        other -> {:error, other}
       end
     end)
+  end
+
+  defp parse_page_count(output) do
+    case output |> String.trim() |> Integer.parse() do
+      {count, ""} when count > 0 -> {:ok, count}
+      _ -> {:error, {:unexpected_output, output}}
+    end
   end
 
   @doc """
@@ -329,17 +330,18 @@ defmodule Qpdf do
   def linearized?(input) do
     with_input_path(input, fn in_file ->
       case run_qpdf(["--check-linearization", in_file]) do
-        {output, 0} ->
-          cond do
-            String.contains?(output, "no linearization errors") -> true
-            String.contains?(output, "not linearized") -> false
-            true -> false
-          end
-
-        other ->
-          {:error, other}
+        {output, 0} -> parse_linearized(output)
+        other -> {:error, other}
       end
     end)
+  end
+
+  defp parse_linearized(output) do
+    cond do
+      String.contains?(output, "no linearization errors") -> true
+      String.contains?(output, "not linearized") -> false
+      true -> false
+    end
   end
 
   @doc """
@@ -496,16 +498,17 @@ defmodule Qpdf do
       args = @default_opts ++ [json_arg, in_file]
 
       case run_qpdf(args) do
-        {output, 0} ->
-          case JSON.decode(output) do
-            {:ok, data} -> {:ok, data}
-            {:error, reason} -> {:error, {:invalid_json, reason}}
-          end
-
-        other ->
-          {:error, other}
+        {output, 0} -> decode_json_output(output)
+        other -> {:error, other}
       end
     end)
+  end
+
+  defp decode_json_output(output) do
+    case JSON.decode(output) do
+      {:ok, data} -> {:ok, data}
+      {:error, reason} -> {:error, {:invalid_json, reason}}
+    end
   end
 
   @doc """
@@ -566,36 +569,7 @@ defmodule Qpdf do
   def attachments(input) do
     case json(input) do
       {:ok, %{"attachments" => atts}} when is_map(atts) ->
-        list =
-          Enum.map(atts, fn {key, att_data} ->
-            stream_info =
-              case att_data["streams"] do
-                %{"/UF" => uf} -> uf
-                %{"/F" => f} -> f
-                _ -> %{}
-              end
-
-            names = att_data["names"] || %{}
-
-            filename =
-              att_data["preferredname"] ||
-                names["/UF"] ||
-                names["/F"] ||
-                key
-
-            %{
-              key: key,
-              filename: filename,
-              mimetype: stream_info["mimetype"],
-              description: att_data["description"],
-              creation_date: stream_info["creationdate"],
-              modification_date: stream_info["modificationdate"],
-              checksum: stream_info["checksum"],
-              filespec: att_data["filespec"]
-            }
-          end)
-
-        {:ok, list}
+        {:ok, Enum.map(atts, &parse_attachment_entry/1)}
 
       {:ok, _} ->
         {:ok, []}
@@ -603,6 +577,31 @@ defmodule Qpdf do
       error ->
         error
     end
+  end
+
+  defp parse_attachment_entry({key, att_data}) do
+    stream_info = extract_stream_info(att_data["streams"])
+    filename = resolve_attachment_entry_filename(key, att_data)
+
+    %{
+      key: key,
+      filename: filename,
+      mimetype: stream_info["mimetype"],
+      description: att_data["description"],
+      creation_date: stream_info["creationdate"],
+      modification_date: stream_info["modificationdate"],
+      checksum: stream_info["checksum"],
+      filespec: att_data["filespec"]
+    }
+  end
+
+  defp extract_stream_info(%{"/UF" => uf}), do: uf
+  defp extract_stream_info(%{"/F" => f}), do: f
+  defp extract_stream_info(_), do: %{}
+
+  defp resolve_attachment_entry_filename(key, att_data) do
+    names = att_data["names"] || %{}
+    att_data["preferredname"] || names["/UF"] || names["/F"] || key
   end
 
   @doc """
@@ -627,13 +626,13 @@ defmodule Qpdf do
           deliver_output(output, opts)
 
         {output, _code} ->
-          if String.contains?(output, "not found") do
-            {:error, :not_found}
-          else
-            {:error, output}
-          end
+          handle_extract_error(output)
       end
     end)
+  end
+
+  defp handle_extract_error(output) do
+    if String.contains?(output, "not found"), do: {:error, :not_found}, else: {:error, output}
   end
 
   @doc """
@@ -668,19 +667,7 @@ defmodule Qpdf do
   def add_attachment(input, attachment, opts \\ []) do
     case resolve_input(attachment) do
       {:ok, resolved_att} ->
-        key =
-          Keyword.get(opts, :key) ||
-            case resolved_att do
-              {:file, p} -> Path.basename(p)
-              {:binary, _} -> "attachment"
-            end
-
-        filename =
-          Keyword.get(opts, :filename) ||
-            case resolved_att do
-              {:file, p} -> Path.basename(p)
-              {:binary, _} -> key
-            end
+        {key, filename} = resolve_attachment_names(resolved_att, opts)
 
         with_two_inputs(
           input,
@@ -704,6 +691,19 @@ defmodule Qpdf do
     end
   end
 
+  defp resolve_attachment_names({:file, p}, opts) do
+    base = Path.basename(p)
+    key = Keyword.get(opts, :key, base)
+    filename = Keyword.get(opts, :filename, base)
+    {key, filename}
+  end
+
+  defp resolve_attachment_names({:binary, _}, opts) do
+    key = Keyword.get(opts, :key, "attachment")
+    filename = Keyword.get(opts, :filename, key)
+    {key, filename}
+  end
+
   @doc """
   Removes an embedded attachment from the PDF by key.
 
@@ -721,16 +721,15 @@ defmodule Qpdf do
   def remove_attachment(input, key, opts \\ []) when is_binary(key) do
     with_input_path(input, fn in_file ->
       args = [in_file | @default_opts] ++ ["--remove-attachment=#{key}"]
-
-      case run_qpdf_into(args, opts) do
-        {:error, {output, _code}} = err ->
-          if String.contains?(output, "not found"), do: {:error, :not_found}, else: err
-
-        other ->
-          other
-      end
+      handle_remove_attachment_result(run_qpdf_into(args, opts))
     end)
   end
+
+  defp handle_remove_attachment_result({:error, {output, _code}} = err) do
+    if String.contains?(output, "not found"), do: {:error, :not_found}, else: err
+  end
+
+  defp handle_remove_attachment_result(other), do: other
 
   @doc """
   Checks whether the PDF file is syntactically valid.
@@ -812,62 +811,59 @@ defmodule Qpdf do
     owner_pass = Keyword.get(opts, :owner_password)
     bits = Keyword.get(opts, :key_length, 256)
 
-    pass_args =
-      if(user_pass, do: ["--user-password=#{user_pass}"], else: []) ++
-        if owner_pass, do: ["--owner-password=#{owner_pass}"], else: []
-
-    insecure_arg =
-      if user_pass && !owner_pass, do: ["--allow-insecure"], else: []
-
-    permission_args =
-      [
-        case Keyword.get(opts, :print) do
-          val when val in [:none, :low, :full] -> ["--print=#{val}"]
-          _ -> []
-        end,
-        case Keyword.get(opts, :modify) do
-          val when val in [:none, :assembly, :form, :annotate, :all] -> ["--modify=#{val}"]
-          _ -> []
-        end,
-        case Keyword.get(opts, :extract) do
-          true -> ["--extract=y"]
-          false -> ["--extract=n"]
-          _ -> []
-        end,
-        case Keyword.get(opts, :annotate) do
-          true -> ["--annotate=y"]
-          false -> ["--annotate=n"]
-          _ -> []
-        end,
-        if(Keyword.get(opts, :cleartext_metadata), do: ["--cleartext-metadata"], else: [])
-      ]
-      |> List.flatten()
+    pass_args = build_pass_args(user_pass, owner_pass)
+    insecure_arg = if user_pass && !owner_pass, do: ["--allow-insecure"], else: []
+    permission_args = build_permission_args(opts)
 
     ["--encrypt"] ++ pass_args ++ ["--bits=#{bits}"] ++ insecure_arg ++ permission_args
   end
 
-  defp build_optimize_args(opts) do
-    stream_arg =
-      case Keyword.get(opts, :stream_data, :compress) do
-        :compress -> ["--stream-data=compress"]
-        :uncompress -> ["--stream-data=uncompress"]
-        :preserve -> ["--stream-data=preserve"]
-        _ -> ["--stream-data=compress"]
-      end
+  defp build_pass_args(user_pass, owner_pass) do
+    user_args = if user_pass, do: ["--user-password=#{user_pass}"], else: []
+    owner_args = if owner_pass, do: ["--owner-password=#{owner_pass}"], else: []
+    user_args ++ owner_args
+  end
 
-    object_arg =
-      case Keyword.get(opts, :object_streams, :generate) do
-        :generate -> ["--object-streams=generate"]
-        :preserve -> ["--object-streams=preserve"]
-        :disable -> ["--object-streams=disable"]
-        _ -> ["--object-streams=generate"]
-      end
+  defp build_permission_args(opts) do
+    [
+      print_perm_arg(Keyword.get(opts, :print)),
+      modify_perm_arg(Keyword.get(opts, :modify)),
+      flag_perm_arg("--extract", Keyword.get(opts, :extract)),
+      flag_perm_arg("--annotate", Keyword.get(opts, :annotate)),
+      if(Keyword.get(opts, :cleartext_metadata), do: ["--cleartext-metadata"], else: [])
+    ]
+    |> List.flatten()
+  end
+
+  defp print_perm_arg(val) when val in [:none, :low, :full], do: ["--print=#{val}"]
+  defp print_perm_arg(_), do: []
+
+  defp modify_perm_arg(val) when val in [:none, :assembly, :form, :annotate, :all],
+    do: ["--modify=#{val}"]
+
+  defp modify_perm_arg(_), do: []
+
+  defp flag_perm_arg(flag, true), do: ["#{flag}=y"]
+  defp flag_perm_arg(flag, false), do: ["#{flag}=n"]
+  defp flag_perm_arg(_flag, _), do: []
+
+  defp build_optimize_args(opts) do
+    stream_arg = stream_data_arg(Keyword.get(opts, :stream_data, :compress))
+    object_arg = object_streams_arg(Keyword.get(opts, :object_streams, :generate))
 
     flate_arg =
       if Keyword.get(opts, :recompress_flate, true), do: ["--recompress-flate"], else: []
 
     stream_arg ++ object_arg ++ flate_arg
   end
+
+  defp stream_data_arg(:uncompress), do: ["--stream-data=uncompress"]
+  defp stream_data_arg(:preserve), do: ["--stream-data=preserve"]
+  defp stream_data_arg(_compress), do: ["--stream-data=compress"]
+
+  defp object_streams_arg(:preserve), do: ["--object-streams=preserve"]
+  defp object_streams_arg(:disable), do: ["--object-streams=disable"]
+  defp object_streams_arg(_generate), do: ["--object-streams=generate"]
 
   defp list_page_files(dir) do
     dir
@@ -892,23 +888,22 @@ defmodule Qpdf do
   defp run_qpdf_into(args_before_out, opts) do
     case resolve_output_target(opts) do
       {:ok, out_target, target_type} ->
-        args = args_before_out ++ ["--", out_target]
-
-        case run_qpdf(args) do
-          {output, 0} ->
-            case target_type do
-              :memory -> {:ok, output}
-              {:file, dest_path} -> {:ok, dest_path}
-            end
-
-          other ->
-            {:error, other}
-        end
+        execute_qpdf_into(args_before_out ++ ["--", out_target], target_type)
 
       {:error, _} = error ->
         error
     end
   end
+
+  defp execute_qpdf_into(args, target_type) do
+    case run_qpdf(args) do
+      {output, 0} -> target_result(target_type, output)
+      other -> {:error, other}
+    end
+  end
+
+  defp target_result(:memory, output), do: {:ok, output}
+  defp target_result({:file, dest_path}, _output), do: {:ok, dest_path}
 
   defp resolve_output_target(opts) do
     case Keyword.get(opts, :into, :memory) do
@@ -988,26 +983,23 @@ defmodule Qpdf do
 
   defp build_layer_args(opts) do
     [
-      case Keyword.get(opts, :to) do
-        nil -> []
-        to_spec -> ["--to=#{format_page_spec(to_spec)}"]
-      end,
-      case Keyword.get(opts, :from) do
-        nil -> []
-        from_spec -> ["--from=#{format_page_spec(from_spec)}"]
-      end,
-      case Keyword.get(opts, :repeat) do
-        nil -> []
-        true -> ["--repeat=1-z"]
-        rep -> ["--repeat=#{format_page_spec(rep)}"]
-      end,
-      case Keyword.get(opts, :password) do
-        nil -> []
-        pass -> ["--password=#{pass}"]
-      end
+      spec_layer_arg("--to", Keyword.get(opts, :to)),
+      spec_layer_arg("--from", Keyword.get(opts, :from)),
+      repeat_layer_arg(Keyword.get(opts, :repeat)),
+      pass_layer_arg(Keyword.get(opts, :password))
     ]
     |> List.flatten()
   end
+
+  defp spec_layer_arg(_flag, nil), do: []
+  defp spec_layer_arg(flag, spec), do: ["#{flag}=#{format_page_spec(spec)}"]
+
+  defp repeat_layer_arg(nil), do: []
+  defp repeat_layer_arg(true), do: ["--repeat=1-z"]
+  defp repeat_layer_arg(rep), do: ["--repeat=#{format_page_spec(rep)}"]
+
+  defp pass_layer_arg(nil), do: []
+  defp pass_layer_arg(pass), do: ["--password=#{pass}"]
 
   defp build_attachment_args(key, filename, opts) do
     [
@@ -1046,21 +1038,23 @@ defmodule Qpdf do
     end
   end
 
-  defp with_two_inputs(input1, input2, func, {name1, name2}) do
+  defp with_two_inputs(input1, input2, func, names) do
     with {:ok, res1} <- resolve_input(input1),
          {:ok, res2} <- resolve_input(input2) do
-      case {res1, res2} do
-        {{:file, f1}, {:file, f2}} ->
-          func.(f1, f2)
-
-        _ ->
-          with_tmp_dir(fn dir ->
-            f1 = materialize_input(res1, dir, name1)
-            f2 = materialize_input(res2, dir, name2)
-            func.(f1, f2)
-          end)
-      end
+      dispatch_two_inputs(res1, res2, func, names)
     end
+  end
+
+  defp dispatch_two_inputs({:file, f1}, {:file, f2}, func, _names) do
+    func.(f1, f2)
+  end
+
+  defp dispatch_two_inputs(res1, res2, func, {name1, name2}) do
+    with_tmp_dir(fn dir ->
+      f1 = materialize_input(res1, dir, name1)
+      f2 = materialize_input(res2, dir, name2)
+      func.(f1, f2)
+    end)
   end
 
   defp materialize_input({:file, path}, _dir, _name), do: path
@@ -1072,49 +1066,54 @@ defmodule Qpdf do
   end
 
   defp with_merged_inputs(inputs, func) do
-    parsed =
-      Enum.reduce_while(inputs, {:ok, []}, fn
-        {{:file, path}, spec}, {:ok, acc} when is_binary(path) ->
-          case resolve_input({:file, path}) do
-            {:ok, resolved} -> {:cont, {:ok, [{resolved, spec} | acc]}}
-            {:error, _} = err -> {:halt, err}
-          end
-
-        {binary, spec}, {:ok, acc} when is_binary(binary) ->
-          {:cont, {:ok, [{{:binary, binary}, spec} | acc]}}
-
-        input, {:ok, acc} ->
-          case resolve_input(input) do
-            {:ok, resolved} -> {:cont, {:ok, [{resolved, nil} | acc]}}
-            {:error, _} = err -> {:halt, err}
-          end
-      end)
-
-    case parsed do
-      {:ok, reversed} ->
-        items = Enum.reverse(reversed)
-        has_binary? = Enum.any?(items, fn {{type, _}, _} -> type == :binary end)
-
-        if has_binary? do
-          with_tmp_dir(fn dir ->
-            file_specs =
-              items
-              |> Enum.with_index(1)
-              |> Enum.map(fn {{res, spec}, idx} ->
-                path = materialize_input(res, dir, "input_#{idx}.pdf")
-                {path, spec}
-              end)
-
-            func.(file_specs)
-          end)
-        else
-          file_specs = Enum.map(items, fn {{:file, path}, spec} -> {path, spec} end)
-          func.(file_specs)
-        end
-
-      {:error, _} = error ->
-        error
+    with {:ok, reversed} <- parse_merge_inputs(inputs) do
+      dispatch_merged_inputs(Enum.reverse(reversed), func)
     end
+  end
+
+  defp parse_merge_inputs(inputs) do
+    Enum.reduce_while(inputs, {:ok, []}, fn item, {:ok, acc} ->
+      case parse_merge_item(item) do
+        {:ok, entry} -> {:cont, {:ok, [entry | acc]}}
+        {:error, _} = err -> {:halt, err}
+      end
+    end)
+  end
+
+  defp parse_merge_item({{type, path}, spec}) when type == :file and is_binary(path) do
+    case resolve_input({:file, path}) do
+      {:ok, resolved} -> {:ok, {resolved, spec}}
+      {:error, _} = err -> err
+    end
+  end
+
+  defp parse_merge_item({binary, spec}) when is_binary(binary) do
+    {:ok, {{:binary, binary}, spec}}
+  end
+
+  defp parse_merge_item(input) do
+    case resolve_input(input) do
+      {:ok, resolved} -> {:ok, {resolved, nil}}
+      {:error, _} = err -> err
+    end
+  end
+
+  defp dispatch_merged_inputs(items, func) do
+    if Enum.any?(items, fn {{type, _}, _} -> type == :binary end) do
+      with_tmp_dir(fn dir ->
+        func.(materialize_all_inputs(items, dir))
+      end)
+    else
+      func.(Enum.map(items, fn {{:file, path}, spec} -> {path, spec} end))
+    end
+  end
+
+  defp materialize_all_inputs(items, dir) do
+    items
+    |> Enum.with_index(1)
+    |> Enum.map(fn {{res, spec}, idx} ->
+      {materialize_input(res, dir, "input_#{idx}.pdf"), spec}
+    end)
   end
 
   defp with_input_and_output_dir(input, func) do

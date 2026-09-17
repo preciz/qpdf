@@ -3,10 +3,12 @@ defmodule Mix.Tasks.Qpdf.InstallTest do
 
   import ExUnit.CaptureIO
 
+  alias Mix.Tasks.Qpdf.Install
+
   test "runs mix qpdf.install task" do
     output =
       capture_io(fn ->
-        Mix.Tasks.Qpdf.Install.run([])
+        Install.run([])
       end)
 
     assert output =~ "qpdf is ready at"

@@ -19,21 +19,16 @@ defmodule Qpdf.Installer do
 
       {:error, :not_found} ->
         # Synchronize across concurrent calls so only one download/install occurs
-        :global.trans({__MODULE__, node()}, fn ->
-          case find_executable() do
-            {:ok, path} ->
-              path
+        :global.trans({__MODULE__, node()}, &install_if_missing!/0)
+    end
+  end
 
-            {:error, :not_found} ->
-              case install() do
-                {:ok, path} ->
-                  path
-
-                {:error, reason} ->
-                  raise_executable_error(reason)
-              end
-          end
-        end)
+  defp install_if_missing! do
+    with {:error, :not_found} <- find_executable(),
+         {:error, reason} <- install() do
+      raise_executable_error(reason)
+    else
+      {:ok, path} -> path
     end
   end
 
@@ -147,12 +142,10 @@ defmodule Qpdf.Installer do
   def storage_dir(version \\ nil) do
     v = version || version()
 
-    cond do
-      is_pid(Process.whereis(Mix.ProjectStack)) and Code.ensure_loaded?(Mix.Project) ->
-        Path.join(Path.dirname(Mix.Project.build_path()), "qpdf-#{v}")
-
-      true ->
-        Path.join(priv_dir(), "native")
+    if is_pid(Process.whereis(Mix.ProjectStack)) and Code.ensure_loaded?(Mix.Project) do
+      Path.join(Path.dirname(Mix.Project.build_path()), "qpdf-#{v}")
+    else
+      Path.join(priv_dir(), "native")
     end
   end
 
