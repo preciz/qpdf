@@ -17,11 +17,28 @@ defmodule Qpdf do
 
   alias Qpdf.CLI
   alias Qpdf.Encryption
+  alias Qpdf.Installer
   alias Qpdf.Temp
 
   @default_opts CLI.default_opts()
 
   @type input :: binary() | {:file, Path.t()}
+
+  @doc """
+  Returns the version of the installed qpdf executable.
+
+  Returns `{:ok, version_string}` on success or `:error` when the executable
+  is not available or cannot be run.
+
+  ## Examples
+
+      case Qpdf.bin_version() do
+        {:ok, version} -> IO.puts("Running qpdf \#{version}")
+        :error -> IO.puts("qpdf is not installed")
+      end
+  """
+  @spec bin_version() :: {:ok, String.t()} | :error
+  defdelegate bin_version, to: Installer
 
   @doc """
   Extracts specified pages or page ranges from a PDF.

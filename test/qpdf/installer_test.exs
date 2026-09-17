@@ -67,6 +67,89 @@ defmodule Qpdf.InstallerTest do
     end
   end
 
+  test "find_executable/0 honors QPDF_PATH environment variable" do
+    orig_env = System.get_env("QPDF_PATH")
+    orig_app = Application.get_env(:qpdf, :executable_path)
+
+    try do
+      Application.delete_env(:qpdf, :executable_path)
+
+      System.put_env("QPDF_PATH", "/bin/sh")
+      assert {:ok, "/bin/sh"} = Installer.find_executable()
+
+      # Application env takes precedence over QPDF_PATH
+      Application.put_env(:qpdf, :executable_path, "/bin/sh")
+      assert {:ok, "/bin/sh"} = Installer.find_executable()
+
+      Application.delete_env(:qpdf, :executable_path)
+      System.put_env("QPDF_PATH", "/nonexistent/custom/env/path")
+
+      assert capture_log(fn ->
+               assert {:error, :not_found} = Installer.find_executable()
+             end) =~ "QPDF_PATH environment variable"
+    after
+      if orig_app do
+        Application.put_env(:qpdf, :executable_path, orig_app)
+      else
+        Application.delete_env(:qpdf, :executable_path)
+      end
+
+      if orig_env do
+        System.put_env("QPDF_PATH", orig_env)
+      else
+        System.delete_env("QPDF_PATH")
+      end
+    end
+  end
+
+  test "bin_version/0 returns version of existing binary" do
+    orig_app = Application.get_env(:qpdf, :executable_path)
+
+    try do
+      case System.find_executable("qpdf") do
+        path when is_binary(path) ->
+          Application.put_env(:qpdf, :executable_path, path)
+          assert {:ok, version} = Installer.bin_version()
+          assert {:ok, ^version} = Qpdf.bin_version()
+          assert is_binary(version)
+          assert Regex.match?(~r/^\d+\.\d+/, version)
+
+        nil ->
+          :ok
+      end
+
+      # Non-existent executable returns :error
+      Application.put_env(:qpdf, :executable_path, "/nonexistent/path")
+
+      capture_log(fn ->
+        assert Installer.bin_version() == :error
+        assert Qpdf.bin_version() == :error
+      end)
+    after
+      if orig_app do
+        Application.put_env(:qpdf, :executable_path, orig_app)
+      else
+        Application.delete_env(:qpdf, :executable_path)
+      end
+    end
+  end
+
+  test "bin_version/0 returns :error when binary fails to execute" do
+    orig_app = Application.get_env(:qpdf, :executable_path)
+
+    try do
+      Application.put_env(:qpdf, :executable_path, "/bin/false")
+      assert Installer.bin_version() == :error
+      assert Qpdf.bin_version() == :error
+    after
+      if orig_app do
+        Application.put_env(:qpdf, :executable_path, orig_app)
+      else
+        Application.delete_env(:qpdf, :executable_path)
+      end
+    end
+  end
+
   test "find_executable/0 honors prefer_system_executable over cached AppImage" do
     orig_prefer = Application.get_env(:qpdf, :prefer_system_executable)
     orig_ver = Application.get_env(:qpdf, :version)

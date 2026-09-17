@@ -37,23 +37,53 @@ defmodule Qpdf.Installer do
   """
   @spec find_executable() :: {:ok, String.t()} | {:error, :not_found}
   def find_executable do
-    cond do
-      configured = Application.get_env(:qpdf, :executable_path) ->
+    with nil <- find_configured_executable(),
+         nil <- find_env_executable(),
+         nil <- find_system_executable(),
+         nil <- find_cached_executable() do
+      {:error, :not_found}
+    end
+  end
+
+  defp find_configured_executable do
+    case Application.get_env(:qpdf, :executable_path) do
+      nil ->
+        nil
+
+      configured ->
         if File.exists?(configured) do
           {:ok, configured}
         else
           Logger.warning("Configured :qpdf executable_path #{configured} does not exist")
           {:error, :not_found}
         end
+    end
+  end
 
-      prefer_system_executable?() and system_executable_exists?() ->
-        {:ok, System.find_executable("qpdf")}
+  defp find_env_executable do
+    case System.get_env("QPDF_PATH") do
+      env when is_binary(env) and env != "" ->
+        if File.exists?(env) do
+          {:ok, env}
+        else
+          Logger.warning("QPDF_PATH environment variable #{env} does not exist")
+          {:error, :not_found}
+        end
 
-      File.exists?(app_run_path()) ->
-        {:ok, app_run_path()}
+      _ ->
+        nil
+    end
+  end
 
-      true ->
-        {:error, :not_found}
+  defp find_system_executable do
+    if prefer_system_executable?() and system_executable_exists?() do
+      {:ok, System.find_executable("qpdf")}
+    end
+  end
+
+  defp find_cached_executable do
+    if File.exists?(app_run_path()) do
+      {:ok, app_run_path()}
     end
   end
 
@@ -70,6 +100,35 @@ defmodule Qpdf.Installer do
   """
   def version do
     Application.get_env(:qpdf, :version, @default_version)
+  end
+
+  @doc """
+  Returns the version of the installed qpdf executable.
+
+  Returns `{:ok, version_string}` on success or `:error` when the executable
+  is not available or cannot be run.
+  """
+  @spec bin_version() :: {:ok, String.t()} | :error
+  def bin_version do
+    with {:ok, path} <- find_executable(),
+         true <- File.exists?(path) do
+      try do
+        case System.cmd(path, ["--version"], stderr_to_stdout: true) do
+          {result, 0} ->
+            case Regex.run(~r/qpdf version (\S+)/, result) do
+              [_, version] -> {:ok, version}
+              nil -> {:ok, String.trim(result)}
+            end
+
+          _ ->
+            :error
+        end
+      rescue
+        _ -> :error
+      end
+    else
+      _ -> :error
+    end
   end
 
   @doc """
