@@ -58,6 +58,20 @@ defmodule Qpdf.TempTest do
         assert Path.basename(dir) =~ ~r/^custom_sub_[0-9A-F]{12}$/
       end)
     end
+
+    test "creates directory with private 0700 permissions" do
+      Temp.with_tmp_dir(fn dir ->
+        case :os.type() do
+          {:unix, _} ->
+            import Bitwise
+            stat = File.stat!(dir)
+            assert band(stat.mode, 0o777) == 0o700
+
+          _ ->
+            assert File.dir?(dir)
+        end
+      end)
+    end
   end
 
   describe "move_file!/2" do

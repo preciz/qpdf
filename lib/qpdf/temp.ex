@@ -36,6 +36,7 @@ defmodule Qpdf.Temp do
       end
 
     File.mkdir_p!(dir)
+    File.chmod!(dir, 0o700)
 
     try do
       func.(dir)
