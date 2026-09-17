@@ -312,7 +312,9 @@ defmodule QpdfTest do
     end
 
     test "encrypts and decrypts with {:file, path}", %{pdf_file: pdf_file} do
-      {:ok, enc} = Qpdf.encrypt({:file, pdf_file}, user_password: "fileuser", owner_password: "fileowner")
+      {:ok, enc} =
+        Qpdf.encrypt({:file, pdf_file}, user_password: "fileuser", owner_password: "fileowner")
+
       assert Qpdf.encrypted?(enc) == true
 
       tmp_enc = Path.join(System.tmp_dir!(), "enc_unit_test.pdf")

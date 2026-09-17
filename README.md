@@ -6,6 +6,11 @@ An Elixir wrapper for the [`qpdf`](https://github.com/qpdf/qpdf) command-line to
 
 - **Input Flexibility**: All functions accept either an in-memory `binary` or `{:file, path}`. When using `{:file, path}`, operations avoid loading the document into BEAM memory or writing redundant temporary copies to disk.
 - **`Qpdf.pages/2`**: Extracts pages or page ranges from a PDF (supports single pages, Elixir ranges `1..5`, page lists, or qpdf range syntax), streaming output directly to memory.
+- **`Qpdf.merge/1`**: Combines multiple PDFs and page selections into a single document in a single execution.
+- **`Qpdf.rotate/2,3`**: Rotates all pages or specific page ranges by any multiple of 90 degrees.
+- **`Qpdf.linearize/1` & `linearized?/1`**: Optimizes PDFs for Fast Web View (page-at-a-time streaming over HTTP) and verifies linearization status.
+- **`Qpdf.encrypt/2` & `decrypt/2`**: Applies password protection and permission restrictions (printing, extraction, form filling) or removes encryption.
+- **`Qpdf.json/1` (or `metadata/1`)**: Parses the complete document structure, outlines/bookmarks, and page geometry as native Elixir data.
 - **`Qpdf.split_pages/2`**: Splits a PDF into individual single-page documents or consecutive multi-page chunks in a single pass.
 - **`Qpdf.page_count/1`**: Quickly returns the page count of a PDF without splitting it (reads only the page tree).
 - **`Qpdf.encrypted?/1`**: Checks whether a PDF is password-protected or encrypted.
@@ -82,30 +87,49 @@ pdf_file = {:file, "document.pdf"}
 IO.puts("Total pages: #{count}")
 
 # 2. Extract specific pages or ranges (streamed directly to stdout into memory)
-# Single page:
 {:ok, page1} = Qpdf.pages(pdf_file, 1)
-
-# Range of pages (returns a 5-page PDF):
 {:ok, chunk} = Qpdf.pages(pdf_file, 1..5)
-
-# Selection of pages:
 {:ok, pages_1_3_5} = Qpdf.pages(pdf_file, [1, 3, 5])
-
-# String range syntax supported by qpdf (e.g. even pages):
 {:ok, even_pages} = Qpdf.pages(pdf_file, "1-z:even")
 
-# 3. Split into pages or groups
-# Individual pages (list of binaries):
-{:ok, single_pages} = Qpdf.split_pages(pdf_binary)
+# 3. Merge multiple documents and selections
+{:ok, merged} = Qpdf.merge([
+  pdf_file,
+  {{:file, "appendix.pdf"}, 1..3},
+  pdf_binary
+])
 
-# Groups of at most N pages:
+# 4. Rotate pages (e.g. fix landscape scans)
+{:ok, rotated_all} = Qpdf.rotate(pdf_file, 90)
+{:ok, rotated_page2} = Qpdf.rotate(pdf_file, 180, 2)
+
+# 5. Linearize for Fast Web View (HTTP streaming)
+false = Qpdf.linearized?(pdf_file)
+{:ok, web_pdf} = Qpdf.linearize(pdf_file)
+true = Qpdf.linearized?(web_pdf)
+
+# 6. Encrypt and decrypt
+{:ok, secure_pdf} = Qpdf.encrypt(pdf_file,
+  user_password: "open",
+  owner_password: "admin",
+  print: :none,
+  extract: false
+)
+{:ok, plain_pdf} = Qpdf.decrypt(secure_pdf, password: "open")
+
+# 7. Extract document metadata, outlines, and structural tree as JSON map
+{:ok, metadata} = Qpdf.json(pdf_file)
+IO.inspect(metadata["outlines"])
+
+# 8. Split into pages or groups
+{:ok, single_pages} = Qpdf.split_pages(pdf_binary)
 {:ok, five_page_chunks} = Qpdf.split_pages(pdf_file, 5)
 
-# 4. Check encryption and validity
+# 9. Check encryption and validity
 false = Qpdf.encrypted?(pdf_file)
 :ok = Qpdf.check(pdf_file)
 
-# 5. Get vector of page sizes without loading page binaries into memory
+# 10. Get vector of page sizes without loading page binaries into memory
 case Qpdf.page_size_vector(pdf_file) do
   {:ok, sizes} ->
     IO.inspect(sizes) # e.g., [12345, 67890, ...]

@@ -515,7 +515,9 @@ defmodule Qpdf do
     pass_args =
       []
       |> then(fn acc -> if user_pass, do: acc ++ ["--user-password=#{user_pass}"], else: acc end)
-      |> then(fn acc -> if owner_pass, do: acc ++ ["--owner-password=#{owner_pass}"], else: acc end)
+      |> then(fn acc ->
+        if owner_pass, do: acc ++ ["--owner-password=#{owner_pass}"], else: acc
+      end)
 
     insecure_arg =
       if user_pass && !owner_pass, do: ["--allow-insecure"], else: []
