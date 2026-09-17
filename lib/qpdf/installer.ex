@@ -19,7 +19,7 @@ defmodule Qpdf.Installer do
 
       {:error, :not_found} ->
         # Synchronize across concurrent calls so only one download/install occurs
-        :global.trans({__MODULE__, node()}, &install_if_missing!/0)
+        :global.trans({__MODULE__, self()}, &install_if_missing!/0)
     end
   end
 

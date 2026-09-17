@@ -290,6 +290,57 @@ defmodule Qpdf.InstallerTest do
     end
   end
 
+  test "ensure_executable!/0 serializes concurrent callers without racing" do
+    call_count = :atomics.new(1, [])
+
+    port =
+      start_mock_server(fn _req ->
+        :atomics.add(call_count, 1, 1)
+        Process.sleep(50)
+
+        body =
+          "#!/bin/sh\n" <>
+            "mkdir -p squashfs-root/usr/bin\n" <>
+            "touch squashfs-root/AppRun\n" <>
+            "touch squashfs-root/usr/bin/qpdf\n" <>
+            "chmod +x squashfs-root/AppRun\n" <>
+            "chmod +x squashfs-root/usr/bin/qpdf\n"
+
+        {"200 OK", body}
+      end)
+
+    test_version = "mock-concurrent-#{Base.encode16(:crypto.strong_rand_bytes(4))}"
+    orig_ver = Application.get_env(:qpdf, :version)
+    orig_url = Application.get_env(:qpdf, :appimage_url)
+
+    try do
+      Application.put_env(:qpdf, :version, test_version)
+      Application.put_env(:qpdf, :appimage_url, "http://127.0.0.1:#{port}/concurrent.AppImage")
+
+      tasks =
+        for _ <- 1..5 do
+          Task.async(fn ->
+            Installer.ensure_executable!()
+          end)
+        end
+
+      results = Task.await_many(tasks)
+      assert length(results) == 5
+      assert Enum.all?(results, &File.exists?/1)
+      assert :atomics.get(call_count, 1) == 1
+    after
+      if orig_ver,
+        do: Application.put_env(:qpdf, :version, orig_ver),
+        else: Application.delete_env(:qpdf, :version)
+
+      if orig_url,
+        do: Application.put_env(:qpdf, :appimage_url, orig_url),
+        else: Application.delete_env(:qpdf, :appimage_url)
+
+      File.rm_rf(Installer.storage_dir(test_version))
+    end
+  end
+
   defp start_mock_server(handler) do
     {:ok, listen_socket} =
       :gen_tcp.listen(0, [:binary, packet: :raw, active: false, reuseaddr: true])
