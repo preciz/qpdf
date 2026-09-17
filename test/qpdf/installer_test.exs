@@ -67,12 +67,11 @@ defmodule Qpdf.InstallerTest do
     end
   end
 
-  test "find_executable/0 honors prefer_system_executable" do
+  test "find_executable/0 honors prefer_system_executable over cached AppImage" do
     orig_prefer = Application.get_env(:qpdf, :prefer_system_executable)
     orig_ver = Application.get_env(:qpdf, :version)
 
     try do
-      Application.put_env(:qpdf, :version, "nonexistent-version-1.0")
       Application.put_env(:qpdf, :prefer_system_executable, true)
 
       case System.find_executable("qpdf") do
@@ -80,7 +79,14 @@ defmodule Qpdf.InstallerTest do
           assert {:ok, ^path} = Installer.find_executable()
 
         nil ->
-          assert {:error, :not_found} = Installer.find_executable()
+          :ok
+      end
+
+      Application.put_env(:qpdf, :prefer_system_executable, false)
+
+      if File.exists?(Installer.app_run_path()) do
+        assert {:ok, path} = Installer.find_executable()
+        assert path == Installer.app_run_path()
       end
     after
       if orig_prefer do

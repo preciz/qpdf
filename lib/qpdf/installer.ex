@@ -46,18 +46,23 @@ defmodule Qpdf.Installer do
           {:error, :not_found}
         end
 
+      prefer_system_executable?() and system_executable_exists?() ->
+        {:ok, System.find_executable("qpdf")}
+
       File.exists?(app_run_path()) ->
         {:ok, app_run_path()}
-
-      Application.get_env(:qpdf, :prefer_system_executable, false) ->
-        case System.find_executable("qpdf") do
-          path when is_binary(path) -> {:ok, path}
-          nil -> {:error, :not_found}
-        end
 
       true ->
         {:error, :not_found}
     end
+  end
+
+  defp prefer_system_executable? do
+    Application.get_env(:qpdf, :prefer_system_executable, false)
+  end
+
+  defp system_executable_exists? do
+    is_binary(System.find_executable("qpdf"))
   end
 
   @doc """
