@@ -15,8 +15,8 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        elixir: ["1.18"]
-        otp: ["27"]
+        elixir: ["1.19"]
+        otp: ["28"]
 
     steps:
       - name: Checkout code
@@ -31,7 +31,7 @@ jobs:
       - name: Install system dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y qpdf
+          sudo apt-get install -y qpdf zstd
 
       - name: Restore dependencies cache
         uses: actions/cache@v4

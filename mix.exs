@@ -8,7 +8,7 @@ defmodule Qpdf.MixProject do
     [
       app: :qpdf,
       version: @version,
-      elixir: "~> 1.18",
+      elixir: "~> 1.19",
       start_permanent: Mix.env() == :prod,
       description: description(),
       package: package(),

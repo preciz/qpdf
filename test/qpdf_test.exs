@@ -1,15 +1,8 @@
 defmodule QpdfTest do
   use ExUnit.Case, async: true
 
-  # 14 page PDF compressed with zstd
-  @test_pdf_zst_path "test/fixtures/qpdf_test.pdf.zst"
-
   setup do
-    pdf_binary =
-      @test_pdf_zst_path
-      |> File.read!()
-      |> :zstd.decompress()
-      |> IO.iodata_to_binary()
+    pdf_binary = Qpdf.TestHelper.sample_pdf()
 
     tmp_dir =
       Path.join(System.tmp_dir!(), "qpdf_test_#{Base.encode16(:crypto.strong_rand_bytes(4))}")

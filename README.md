@@ -15,7 +15,7 @@ An Elixir wrapper for the [`qpdf`](https://github.com/qpdf/qpdf) command-line to
 
 ## Requirements
 
-- Elixir `~> 1.18`
+- Elixir `~> 1.19`
 - Linux x86_64 (official AppImage automatically downloaded and extracted), or a system-installed `qpdf` binary (`brew install qpdf`, `apt install qpdf`, etc.) on other platforms.
 
 ## Installation

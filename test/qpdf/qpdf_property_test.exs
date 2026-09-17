@@ -2,16 +2,8 @@ defmodule Qpdf.QpdfPropertyTest do
   use ExUnit.Case, async: true
   use ExUnitProperties
 
-  @test_pdf_zst_path "test/fixtures/qpdf_test.pdf.zst"
-
   setup_all do
-    pdf =
-      @test_pdf_zst_path
-      |> File.read!()
-      |> :zstd.decompress()
-      |> IO.iodata_to_binary()
-
-    %{pdf: pdf}
+    %{pdf: Qpdf.TestHelper.sample_pdf()}
   end
 
   property "page_count equals range length for any valid 1 <= a <= b <= 14", %{pdf: pdf} do
