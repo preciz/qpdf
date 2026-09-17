@@ -89,6 +89,29 @@ defmodule QpdfTest do
       assert page_count!(merged) == 5
     end
 
+    test "safely merges in-place into an input file without truncating content", %{
+      pdf_binary: pdf_binary
+    } do
+      tmp_file =
+        Path.join(
+          System.tmp_dir!(),
+          "merge_inplace_#{Base.encode16(:crypto.strong_rand_bytes(4))}.pdf"
+        )
+
+      File.write!(tmp_file, pdf_binary)
+
+      try do
+        assert {:ok, ^tmp_file} = Qpdf.merge([{:file, tmp_file}], into: tmp_file)
+        assert page_count!(File.read!(tmp_file)) == 14
+        assert :ok = Qpdf.check({:file, tmp_file})
+
+        {:ok, page1} = Qpdf.pages({:file, tmp_file}, 1)
+        assert byte_size(page1) > 10_000
+      after
+        File.rm(tmp_file)
+      end
+    end
+
     test "returns :empty_inputs for empty list" do
       assert {:error, :empty_inputs} = Qpdf.merge([])
     end

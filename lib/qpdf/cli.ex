@@ -37,8 +37,11 @@ defmodule Qpdf.CLI do
   @spec run_into([String.t()], keyword()) :: {:ok, binary() | Path.t()} | {:error, any()}
   def run_into(args_before_out, opts) do
     case resolve_output_target(opts) do
-      {:ok, out_target, target_type} ->
-        execute_into(args_before_out ++ ["--", out_target], target_type)
+      {:ok, "-", :memory} ->
+        execute_into_memory(args_before_out)
+
+      {:ok, dest_path, {:file, dest_path}} ->
+        execute_into_file(args_before_out, dest_path)
 
       {:error, _} = error ->
         error
@@ -84,15 +87,27 @@ defmodule Qpdf.CLI do
     end
   end
 
-  defp execute_into(args, target_type) do
-    case run(args) do
-      {output, 0} -> target_result(target_type, output)
+  defp execute_into_memory(args_before_out) do
+    case run(args_before_out ++ ["--", "-"]) do
+      {output, 0} -> {:ok, output}
       other -> {:error, other}
     end
   end
 
-  defp target_result(:memory, output), do: {:ok, output}
-  defp target_result({:file, dest_path}, _output), do: {:ok, dest_path}
+  defp execute_into_file(args_before_out, dest_path) do
+    Qpdf.Temp.with_tmp_dir(fn staging_dir ->
+      staged_target = Path.join(staging_dir, "staged_output.pdf")
+
+      case run(args_before_out ++ ["--", staged_target]) do
+        {_output, 0} ->
+          Qpdf.Temp.move_file!(staged_target, dest_path)
+          {:ok, dest_path}
+
+        other ->
+          {:error, other}
+      end
+    end)
+  end
 
   defp prepare_file_destination(path) do
     expanded = Path.expand(path)
