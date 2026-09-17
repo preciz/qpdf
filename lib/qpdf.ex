@@ -101,9 +101,7 @@ defmodule Qpdf do
         {_, 0} ->
           groups =
             dir
-            |> Path.join("page*.pdf")
-            |> Path.wildcard()
-            |> Enum.sort()
+            |> list_page_files()
             |> Enum.map(&File.read!/1)
 
           {:ok, groups}
@@ -122,30 +120,18 @@ defmodule Qpdf do
   """
   @spec split(input()) :: {:ok, [{non_neg_integer, binary}]} | {:error, any}
   def split(input) do
-    with_input_and_output_dir(input, fn in_file, dir ->
-      out_file = Path.join(dir, "page.pdf")
-      args = @default_opts ++ ["--split-pages", in_file, out_file]
+    case split_pages(input, 1) do
+      {:ok, pages} ->
+        indexed =
+          pages
+          |> Enum.with_index(1)
+          |> Enum.map(fn {page, index} -> {index, page} end)
 
-      case run_qpdf(args) do
-        {_, 0} ->
-          pages =
-            dir
-            |> Path.join("page*.pdf")
-            |> Path.wildcard()
-            |> Enum.map(fn page_path ->
-              {number, ".pdf"} =
-                page_path |> String.split("page-") |> List.last() |> Integer.parse()
+        {:ok, indexed}
 
-              {number, File.read!(page_path)}
-            end)
-            |> Enum.sort()
-
-          {:ok, pages}
-
-        other ->
-          {:error, other}
-      end
-    end)
+      error ->
+        error
+    end
   end
 
   @doc """
@@ -241,17 +227,8 @@ defmodule Qpdf do
         {_, 0} ->
           sizes =
             dir
-            |> Path.join("page*.pdf")
-            |> Path.wildcard()
-            |> Enum.map(fn page_path ->
-              {number, ".pdf"} =
-                page_path |> String.split("page-") |> List.last() |> Integer.parse()
-
-              %{size: size} = File.stat!(page_path)
-              {number, size}
-            end)
-            |> Enum.sort()
-            |> Enum.map(fn {_number, size} -> size end)
+            |> list_page_files()
+            |> Enum.map(fn page_path -> File.stat!(page_path).size end)
 
           {:ok, sizes}
 
@@ -285,12 +262,24 @@ defmodule Qpdf do
   defp format_page_spec(pages) when is_list(pages), do: Enum.join(pages, ",")
   defp format_page_spec(spec), do: to_string(spec)
 
+  defp list_page_files(dir) do
+    dir
+    |> Path.join("page*.pdf")
+    |> Path.wildcard()
+    |> Enum.sort_by(fn path ->
+      case Regex.run(~r/page-(\d+)/, Path.basename(path)) do
+        [_, num] -> String.to_integer(num)
+        _ -> path
+      end
+    end)
+  end
+
   defp qpdf_executable do
     Qpdf.Installer.ensure_executable!()
   end
 
-  defp run_qpdf(args) do
-    System.cmd(qpdf_executable(), args)
+  defp run_qpdf(args, opts \\ [stderr_to_stdout: true]) do
+    System.cmd(qpdf_executable(), args, opts)
   end
 
   defp with_input_path(input, func) do

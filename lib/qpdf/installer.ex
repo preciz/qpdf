@@ -148,7 +148,7 @@ defmodule Qpdf.Installer do
     v = version || version()
 
     cond do
-      Code.ensure_loaded?(Mix.Project) ->
+      is_pid(Process.whereis(Mix.ProjectStack)) and Code.ensure_loaded?(Mix.Project) ->
         Path.join(Path.dirname(Mix.Project.build_path()), "qpdf-#{v}")
 
       true ->
