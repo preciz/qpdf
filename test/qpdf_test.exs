@@ -647,6 +647,105 @@ defmodule QpdfTest do
     end
   end
 
+  describe "attachments/1, extract_attachment/3, add_attachment/3, and remove_attachment/3" do
+    test "returns empty list when document has no attachments", %{pdf_binary: pdf_binary} do
+      assert {:ok, []} = Qpdf.attachments(pdf_binary)
+    end
+
+    test "adds, lists, extracts, and removes binary attachment", %{pdf_binary: pdf_binary} do
+      payload = "Hello attachment payload content <xml>123</xml>"
+
+      {:ok, with_att} =
+        Qpdf.add_attachment(pdf_binary, payload,
+          key: "invoice.xml",
+          filename: "factur-x.xml",
+          mimetype: "text/xml",
+          description: "E-Invoice"
+        )
+
+      assert {:ok, [att]} = Qpdf.attachments(with_att)
+      assert att.key == "invoice.xml"
+      assert att.filename == "factur-x.xml"
+      assert att.mimetype == "text/xml"
+      assert att.description == "E-Invoice"
+
+      # Extract to memory
+      assert {:ok, ^payload} = Qpdf.extract_attachment(with_att, "invoice.xml")
+
+      # Extract directly to file with into:
+      dest_extracted =
+        Path.join(
+          System.tmp_dir!(),
+          "extracted_#{Base.encode16(:crypto.strong_rand_bytes(4))}.xml"
+        )
+
+      on_exit(fn -> File.rm(dest_extracted) end)
+
+      assert {:ok, ^dest_extracted} =
+               Qpdf.extract_attachment(with_att, "invoice.xml", into: dest_extracted)
+
+      assert File.read!(dest_extracted) == payload
+
+      # Extract non-existent key
+      assert {:error, :not_found} = Qpdf.extract_attachment(with_att, "non_existent")
+
+      # Remove attachment
+      {:ok, cleaned} = Qpdf.remove_attachment(with_att, "invoice.xml")
+      assert {:ok, []} = Qpdf.attachments(cleaned)
+
+      # Removing non-existent key
+      assert {:error, :not_found} = Qpdf.remove_attachment(cleaned, "non_existent")
+    end
+
+    test "adds attachment from file with into: option", %{pdf_file: pdf_file} do
+      att_src =
+        Path.join(
+          System.tmp_dir!(),
+          "source_att_#{Base.encode16(:crypto.strong_rand_bytes(4))}.csv"
+        )
+
+      File.write!(att_src, "id,name\n1,Alice\n2,Bob")
+
+      dest_pdf =
+        Path.join(
+          System.tmp_dir!(),
+          "with_csv_#{Base.encode16(:crypto.strong_rand_bytes(4))}.pdf"
+        )
+
+      on_exit(fn ->
+        File.rm(att_src)
+        File.rm(dest_pdf)
+      end)
+
+      assert {:ok, ^dest_pdf} =
+               Qpdf.add_attachment({:file, pdf_file}, {:file, att_src}, into: dest_pdf)
+
+      assert {:ok, [att]} = Qpdf.attachments({:file, dest_pdf})
+      assert att.key == Path.basename(att_src)
+      assert att.filename == Path.basename(att_src)
+
+      # Replace attachment
+      {:ok, replaced} =
+        Qpdf.add_attachment({:file, dest_pdf}, "updated content",
+          key: Path.basename(att_src),
+          replace: true
+        )
+
+      assert {:ok, "updated content"} =
+               Qpdf.extract_attachment(replaced, Path.basename(att_src))
+    end
+
+    test "returns errors for invalid attachments or paths", %{pdf_binary: pdf_binary} do
+      assert {:error, :invalid_attachment} = Qpdf.add_attachment(pdf_binary, 12345)
+
+      assert {:error, :enoent} =
+               Qpdf.add_attachment(pdf_binary, {:file, "/non/existent/file.txt"})
+
+      assert {:error, :invalid_input} = Qpdf.add_attachment(12345, "content")
+      assert {:error, _} = Qpdf.attachments("not a pdf")
+    end
+  end
+
   describe "tmp_dir/0" do
     test "returns default tmp dir or configured value" do
       assert Qpdf.tmp_dir() == System.tmp_dir!()

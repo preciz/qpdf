@@ -510,6 +510,203 @@ defmodule Qpdf do
   def metadata(input), do: json(input)
 
   @doc """
+  Returns a list of all embedded attachments in the PDF.
+
+  Extracts attachment metadata including key, filename, mime-type, description,
+  creation/modification dates, and checksums.
+
+  ## Examples
+
+      {:ok, attachments} = Qpdf.attachments(pdf)
+      # => [%{key: "invoice.xml", filename: "invoice.xml", mimetype: "application/xml", ...}]
+  """
+  @spec attachments(input()) :: {:ok, [map()]} | {:error, any()}
+  def attachments(input) do
+    case json(input) do
+      {:ok, %{"attachments" => atts}} when is_map(atts) ->
+        list =
+          Enum.map(atts, fn {key, att_data} ->
+            stream_info =
+              case att_data["streams"] do
+                %{"/UF" => uf} -> uf
+                %{"/F" => f} -> f
+                _ -> %{}
+              end
+
+            names = att_data["names"] || %{}
+
+            filename =
+              att_data["preferredname"] ||
+                names["/UF"] ||
+                names["/F"] ||
+                key
+
+            %{
+              key: key,
+              filename: filename,
+              mimetype: stream_info["mimetype"],
+              description: att_data["description"],
+              creation_date: stream_info["creationdate"],
+              modification_date: stream_info["modificationdate"],
+              checksum: stream_info["checksum"],
+              filespec: att_data["filespec"]
+            }
+          end)
+
+        {:ok, list}
+
+      {:ok, _} ->
+        {:ok, []}
+
+      error ->
+        error
+    end
+  end
+
+  @doc """
+  Extracts the raw contents of an embedded attachment by key.
+
+  Outputs the attachment directly into memory as a binary, or into a file if `:into` is specified.
+
+  ## Options
+    * `:into` - destination: `:memory` (default) or `path` / `{:file, path}`
+
+  ## Examples
+
+      {:ok, xml_bytes} = Qpdf.extract_attachment(pdf, "invoice.xml")
+      {:ok, path} = Qpdf.extract_attachment(pdf, "invoice.xml", into: "extracted.xml")
+  """
+  @spec extract_attachment(input(), String.t(), keyword()) ::
+          {:ok, binary() | Path.t()} | {:error, any()}
+  def extract_attachment(input, key, opts \\ []) when is_binary(key) do
+    with_input_path(input, fn in_file ->
+      case run_qpdf(["--no-warn", "--warning-exit-0", "--show-attachment=#{key}", in_file]) do
+        {output, 0} ->
+          case Keyword.get(opts, :into, :memory) do
+            :memory ->
+              {:ok, output}
+
+            {:file, path} when is_binary(path) ->
+              expanded = Path.expand(path)
+              File.mkdir_p!(Path.dirname(expanded))
+              File.write!(expanded, output)
+              {:ok, expanded}
+
+            path when is_binary(path) ->
+              expanded = Path.expand(path)
+              File.mkdir_p!(Path.dirname(expanded))
+              File.write!(expanded, output)
+              {:ok, expanded}
+
+            _ ->
+              {:error, :invalid_destination}
+          end
+
+        {output, _code} ->
+          if String.contains?(output, "not found") do
+            {:error, :not_found}
+          else
+            {:error, output}
+          end
+      end
+    end)
+  end
+
+  @doc """
+  Embeds an attachment (file or binary data) into the PDF document.
+
+  Outputs the resulting PDF directly to standard output or a destination file.
+
+  ## Options
+    * `:key` - unique key for the attachment (defaults to filename or `"attachment"`)
+    * `:filename` - displayed filename in PDF viewers (defaults to key or basename)
+    * `:mimetype` - MIME type (e.g., `"application/xml"`, `"text/plain"`)
+    * `:description` - optional description string
+    * `:creation_date` - creation date string
+    * `:mod_date` - modification date string
+    * `:replace` - boolean, replace existing attachment if key already exists (default `false`)
+    * `:into` - destination: `:memory` (default) or `path` / `{:file, path}`
+
+  ## Examples
+
+      # Embed XML invoice for Factur-X / ZUGFeRD compliance
+      {:ok, embedded} = Qpdf.add_attachment(pdf, xml_binary,
+        key: "factur-x.xml",
+        filename: "factur-x.xml",
+        mimetype: "text/xml"
+      )
+
+      # Embed a file from disk
+      {:ok, embedded} = Qpdf.add_attachment(pdf, {:file, "attachment.csv"}, into: "with_csv.pdf")
+  """
+  @spec add_attachment(input(), input(), keyword()) ::
+          {:ok, binary() | Path.t()} | {:error, any()}
+  def add_attachment(input, attachment, opts \\ []) do
+    with_attachment_inputs(input, attachment, opts, fn in_file, att_file, key, filename ->
+      att_opts =
+        ["--key=#{key}", "--filename=#{filename}"]
+        |> then(fn acc ->
+          case Keyword.get(opts, :mimetype) do
+            nil -> acc
+            mt -> acc ++ ["--mimetype=#{mt}"]
+          end
+        end)
+        |> then(fn acc ->
+          case Keyword.get(opts, :description) do
+            nil -> acc
+            desc -> acc ++ ["--description=#{desc}"]
+          end
+        end)
+        |> then(fn acc ->
+          case Keyword.get(opts, :creation_date) do
+            nil -> acc
+            cd -> acc ++ ["--creationdate=#{cd}"]
+          end
+        end)
+        |> then(fn acc ->
+          case Keyword.get(opts, :mod_date) do
+            nil -> acc
+            md -> acc ++ ["--moddate=#{md}"]
+          end
+        end)
+        |> then(fn acc ->
+          if Keyword.get(opts, :replace, false), do: acc ++ ["--replace"], else: acc
+        end)
+
+      args = [in_file | @default_opts] ++ ["--add-attachment", att_file] ++ att_opts ++ ["--"]
+      run_qpdf_into(args, opts)
+    end)
+  end
+
+  @doc """
+  Removes an embedded attachment from the PDF by key.
+
+  Outputs the resulting PDF directly to standard output or a destination file.
+
+  ## Options
+    * `:into` - destination: `:memory` (default) or `path` / `{:file, path}`
+
+  ## Examples
+
+      {:ok, cleaned_pdf} = Qpdf.remove_attachment(pdf, "factur-x.xml")
+  """
+  @spec remove_attachment(input(), String.t(), keyword()) ::
+          {:ok, binary() | Path.t()} | {:error, any()}
+  def remove_attachment(input, key, opts \\ []) when is_binary(key) do
+    with_input_path(input, fn in_file ->
+      args = [in_file | @default_opts] ++ ["--remove-attachment=#{key}"]
+
+      case run_qpdf_into(args, opts) do
+        {:error, {output, _code}} = err ->
+          if String.contains?(output, "not found"), do: {:error, :not_found}, else: err
+
+        other ->
+          other
+      end
+    end)
+  end
+
+  @doc """
   Checks whether the PDF file is syntactically valid.
 
   Uses `qpdf --check`.
@@ -831,6 +1028,63 @@ defmodule Qpdf do
 
   defp normalize_layer_input(binary) when is_binary(binary), do: {:ok, {:binary, binary}}
   defp normalize_layer_input(_other), do: {:error, :invalid_input}
+
+  defp with_attachment_inputs(input, attachment, opts, func) do
+    with {:ok, resolved_input} <- normalize_layer_input(input),
+         {:ok, resolved_att, key, filename} <- normalize_attachment(attachment, opts) do
+      case {resolved_input, resolved_att} do
+        {{:file, f1}, {:file, f2}} ->
+          func.(f1, f2, key, filename)
+
+        _ ->
+          with_tmp_dir(fn dir ->
+            f1 =
+              case resolved_input do
+                {:file, path} ->
+                  path
+
+                {:binary, bin} ->
+                  p = Path.join(dir, "input_doc.pdf")
+                  File.write!(p, bin)
+                  p
+              end
+
+            f2 =
+              case resolved_att do
+                {:file, path} ->
+                  path
+
+                {:binary, bin} ->
+                  p = Path.join(dir, filename)
+                  File.write!(p, bin)
+                  p
+              end
+
+            func.(f1, f2, key, filename)
+          end)
+      end
+    end
+  end
+
+  defp normalize_attachment({:file, path}, opts) when is_binary(path) do
+    expanded = Path.expand(path)
+
+    if File.regular?(expanded) do
+      key = Keyword.get(opts, :key) || Path.basename(path)
+      filename = Keyword.get(opts, :filename) || Path.basename(path)
+      {:ok, {:file, expanded}, key, filename}
+    else
+      {:error, :enoent}
+    end
+  end
+
+  defp normalize_attachment(binary, opts) when is_binary(binary) do
+    key = Keyword.get(opts, :key, "attachment")
+    filename = Keyword.get(opts, :filename, key)
+    {:ok, {:binary, binary}, key, filename}
+  end
+
+  defp normalize_attachment(_other, _opts), do: {:error, :invalid_attachment}
 
   defp with_input_path(input, func) do
     case resolve_input(input) do
