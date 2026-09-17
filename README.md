@@ -1,5 +1,7 @@
 # Qpdf Elixir Wrapper
 
+[![CI](https://github.com/preciz/qpdf/actions/workflows/ci.yml/badge.svg)](https://github.com/preciz/qpdf/actions/workflows/ci.yml)
+
 An Elixir wrapper for the [`qpdf`](https://github.com/qpdf/qpdf) command-line tool. It allows Elixir applications to interact with PDF files in-memory (as binaries) or directly from disk (`{:file, path}`) for operations such as page extraction, range selection, splitting, validation, and metadata inspection.
 
 ## Features
