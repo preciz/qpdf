@@ -5,37 +5,71 @@ defmodule Qpdf.Encryption do
   Builds CLI arguments for `--encrypt` based on user options.
   """
   @spec build_encrypt_args(keyword()) ::
-          {:ok, [String.t()]} | {:error, :weak_crypto_not_allowed | :invalid_key_length}
+          {:ok, [String.t()]}
+          | {:error, :weak_crypto_not_allowed | :invalid_key_length | :missing_owner_password}
   def build_encrypt_args(opts) do
     bits = Keyword.get(opts, :key_length, 256)
-    use_aes = Keyword.get(opts, :use_aes, true)
-    allow_weak = Keyword.get(opts, :allow_weak_crypto, false)
 
-    cond do
-      bits not in [40, 128, 256] ->
-        {:error, :invalid_key_length}
-
-      bits == 40 and not allow_weak ->
-        {:error, :weak_crypto_not_allowed}
-
-      bits == 128 and not use_aes and not allow_weak ->
-        {:error, :weak_crypto_not_allowed}
-
-      true ->
-        {:ok, do_build_encrypt_args(opts, bits, use_aes, allow_weak)}
+    with :ok <- validate_bits(bits),
+         :ok <- validate_crypto_safety(opts, bits),
+         :ok <- validate_password_security(opts, bits) do
+      {:ok, do_build_encrypt_args(opts, bits)}
     end
   end
 
-  defp do_build_encrypt_args(opts, bits, use_aes, allow_weak) do
+  defp validate_bits(bits) when bits in [40, 128, 256], do: :ok
+  defp validate_bits(_), do: {:error, :invalid_key_length}
+
+  defp validate_crypto_safety(opts, 40) do
+    if Keyword.get(opts, :allow_weak_crypto, false),
+      do: :ok,
+      else: {:error, :weak_crypto_not_allowed}
+  end
+
+  defp validate_crypto_safety(opts, 128) do
+    if Keyword.get(opts, :use_aes, true) or Keyword.get(opts, :allow_weak_crypto, false) do
+      :ok
+    else
+      {:error, :weak_crypto_not_allowed}
+    end
+  end
+
+  defp validate_crypto_safety(_opts, _bits), do: :ok
+
+  defp validate_password_security(opts, 256) do
     user_pass = Keyword.get(opts, :user_password)
     owner_pass = Keyword.get(opts, :owner_password)
+    allow_insecure = Keyword.get(opts, :allow_insecure, false)
+
+    if not empty_or_nil?(user_pass) and empty_or_nil?(owner_pass) and not allow_insecure do
+      {:error, :missing_owner_password}
+    else
+      :ok
+    end
+  end
+
+  defp validate_password_security(_opts, _bits), do: :ok
+
+  defp empty_or_nil?(nil), do: true
+  defp empty_or_nil?(""), do: true
+  defp empty_or_nil?(_), do: false
+
+  defp do_build_encrypt_args(opts, bits) do
+    user_pass = Keyword.get(opts, :user_password)
+    owner_pass = Keyword.get(opts, :owner_password)
+    use_aes = Keyword.get(opts, :use_aes, true)
+    allow_weak = Keyword.get(opts, :allow_weak_crypto, false)
+    allow_insecure = Keyword.get(opts, :allow_insecure, false)
 
     weak_flag = if allow_weak, do: ["--allow-weak-crypto"], else: []
     pass_args = build_pass_args(user_pass, owner_pass)
     aes_arg = if bits == 128, do: [if(use_aes, do: "--use-aes=y", else: "--use-aes=n")], else: []
 
     insecure_arg =
-      if (bits == 256 and user_pass) && !owner_pass, do: ["--allow-insecure"], else: []
+      if bits == 256 and allow_insecure and not empty_or_nil?(user_pass) and
+           empty_or_nil?(owner_pass),
+         do: ["--allow-insecure"],
+         else: []
 
     permission_args = build_permission_args(opts, bits)
 

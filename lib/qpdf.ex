@@ -422,10 +422,11 @@ defmodule Qpdf do
 
   ## Options
     * `:user_password` - password required to open the PDF (default: `""`)
-    * `:owner_password` - password required to modify permissions (default: `""`)
+    * `:owner_password` - password required to modify permissions (required for 256-bit keys when `:user_password` is provided, unless `allow_insecure: true`; default: `""`)
     * `:key_length` - encryption key length: `40` (requires `allow_weak_crypto: true`), `128`, or `256` (default: `256`)
     * `:use_aes` - boolean, use AES encryption for 128-bit keys (default: `true`)
     * `:allow_weak_crypto` - boolean, allow writing insecure/legacy encryption (required for `key_length: 40` or 128-bit RC4, default: `false`)
+    * `:allow_insecure` - boolean, allow setting a user password with an empty owner password for 256-bit keys (insecure, allows passwordless opening; default: `false`)
     * `:print` - print permission: `:none`, `:low`, or `:full`
     * `:modify` - modification permission: `:none`, `:assembly`, `:form`, `:annotate`, or `:all`
     * `:extract` - boolean, allow text/graphic extraction

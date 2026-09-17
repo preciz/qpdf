@@ -373,11 +373,20 @@ defmodule QpdfTest do
       assert {:error, _} = Qpdf.decrypt(enc, password: "wrong")
     end
 
-    test "encrypts with user password only (insecure)", %{pdf_binary: pdf_binary} do
-      {:ok, enc} = Qpdf.encrypt(pdf_binary, user_password: "user123")
-      assert Qpdf.encrypted?(enc) == true
+    test "rejects user password without owner password for 256-bit unless allow_insecure: true",
+         %{
+           pdf_binary: pdf_binary
+         } do
+      assert {:error, :missing_owner_password} =
+               Qpdf.encrypt(pdf_binary, user_password: "user123")
 
-      {:ok, dec} = Qpdf.decrypt(enc, password: "user123")
+      assert {:ok, enc} =
+               Qpdf.encrypt(pdf_binary, user_password: "user123", allow_insecure: true)
+
+      assert Qpdf.encrypted?(enc) == true
+      # Insecure PDF has empty owner password, so it can be opened without password
+      assert Qpdf.requires_password?(enc) == false
+      assert {:ok, dec} = Qpdf.decrypt(enc)
       assert Qpdf.encrypted?(dec) == false
     end
 
@@ -669,7 +678,11 @@ defmodule QpdfTest do
       end)
 
       assert {:ok, ^dest_enc} =
-               Qpdf.encrypt({:file, pdf_file}, user_password: "foo", into: dest_enc)
+               Qpdf.encrypt({:file, pdf_file},
+                 user_password: "foo",
+                 owner_password: "bar",
+                 into: dest_enc
+               )
 
       assert File.exists?(dest_enc)
       assert Qpdf.encrypted?({:file, dest_enc}) == true
@@ -1124,7 +1137,8 @@ defmodule QpdfTest do
     end
 
     test "works with {:file, path}", %{pdf_binary: pdf_binary} do
-      {:ok, enc} = Qpdf.encrypt(pdf_binary, user_password: "file_pw")
+      {:ok, enc} =
+        Qpdf.encrypt(pdf_binary, user_password: "file_pw", owner_password: "admin_pw")
 
       tmp_enc =
         Path.join(

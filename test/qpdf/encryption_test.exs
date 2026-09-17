@@ -10,8 +10,16 @@ defmodule Qpdf.EncryptionTest do
       assert "--bits=256" in args
     end
 
-    test "includes passwords and allow-insecure flag when only user password is provided for 256-bit" do
-      assert {:ok, args} = Encryption.build_encrypt_args(user_password: "userpass")
+    test "rejects user password without owner password for 256-bit unless allow_insecure: true" do
+      assert {:error, :missing_owner_password} =
+               Encryption.build_encrypt_args(user_password: "userpass")
+
+      assert {:error, :missing_owner_password} =
+               Encryption.build_encrypt_args(user_password: "userpass", owner_password: "")
+
+      assert {:ok, args} =
+               Encryption.build_encrypt_args(user_password: "userpass", allow_insecure: true)
+
       assert "--user-password=userpass" in args
       assert "--allow-insecure" in args
 
