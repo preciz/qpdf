@@ -4,17 +4,48 @@ defmodule Qpdf.Encryption do
   @doc """
   Builds CLI arguments for `--encrypt` based on user options.
   """
-  @spec build_encrypt_args(keyword()) :: [String.t()]
+  @spec build_encrypt_args(keyword()) ::
+          {:ok, [String.t()]} | {:error, :weak_crypto_not_allowed | :invalid_key_length}
   def build_encrypt_args(opts) do
+    bits = Keyword.get(opts, :key_length, 256)
+    use_aes = Keyword.get(opts, :use_aes, true)
+    allow_weak = Keyword.get(opts, :allow_weak_crypto, false)
+
+    cond do
+      bits not in [40, 128, 256] ->
+        {:error, :invalid_key_length}
+
+      bits == 40 and not allow_weak ->
+        {:error, :weak_crypto_not_allowed}
+
+      bits == 128 and not use_aes and not allow_weak ->
+        {:error, :weak_crypto_not_allowed}
+
+      true ->
+        {:ok, do_build_encrypt_args(opts, bits, use_aes, allow_weak)}
+    end
+  end
+
+  defp do_build_encrypt_args(opts, bits, use_aes, allow_weak) do
     user_pass = Keyword.get(opts, :user_password)
     owner_pass = Keyword.get(opts, :owner_password)
-    bits = Keyword.get(opts, :key_length, 256)
 
+    weak_flag = if allow_weak, do: ["--allow-weak-crypto"], else: []
     pass_args = build_pass_args(user_pass, owner_pass)
-    insecure_arg = if user_pass && !owner_pass, do: ["--allow-insecure"], else: []
-    permission_args = build_permission_args(opts)
+    aes_arg = if bits == 128, do: [if(use_aes, do: "--use-aes=y", else: "--use-aes=n")], else: []
 
-    ["--encrypt"] ++ pass_args ++ ["--bits=#{bits}"] ++ insecure_arg ++ permission_args
+    insecure_arg =
+      if (bits == 256 and user_pass) && !owner_pass, do: ["--allow-insecure"], else: []
+
+    permission_args = build_permission_args(opts, bits)
+
+    weak_flag ++
+      ["--encrypt"] ++
+      pass_args ++
+      ["--bits=#{bits}"] ++
+      aes_arg ++
+      insecure_arg ++
+      permission_args
   end
 
   @doc """
@@ -35,7 +66,17 @@ defmodule Qpdf.Encryption do
     user_args ++ owner_args
   end
 
-  defp build_permission_args(opts) do
+  defp build_permission_args(opts, 40) do
+    [
+      print_perm_arg_40(Keyword.get(opts, :print)),
+      modify_perm_arg_40(Keyword.get(opts, :modify)),
+      flag_perm_arg("--extract", Keyword.get(opts, :extract)),
+      flag_perm_arg("--annotate", Keyword.get(opts, :annotate))
+    ]
+    |> List.flatten()
+  end
+
+  defp build_permission_args(opts, _bits) do
     [
       print_perm_arg(Keyword.get(opts, :print)),
       modify_perm_arg(Keyword.get(opts, :modify)),
@@ -46,12 +87,27 @@ defmodule Qpdf.Encryption do
     |> List.flatten()
   end
 
+  defp print_perm_arg_40(val) when val in [:none, false, "n"], do: ["--print=n"]
+  defp print_perm_arg_40(val) when val in [:low, :full, true, "y"], do: ["--print=y"]
+  defp print_perm_arg_40(_), do: []
+
+  defp modify_perm_arg_40(val) when val in [:none, false, "n"], do: ["--modify=n"]
+
+  defp modify_perm_arg_40(val) when val in [:assembly, :form, :annotate, :all, true, "y"],
+    do: ["--modify=y"]
+
+  defp modify_perm_arg_40(_), do: []
+
   defp print_perm_arg(val) when val in [:none, :low, :full], do: ["--print=#{val}"]
+  defp print_perm_arg(true), do: ["--print=full"]
+  defp print_perm_arg(false), do: ["--print=none"]
   defp print_perm_arg(_), do: []
 
   defp modify_perm_arg(val) when val in [:none, :assembly, :form, :annotate, :all],
     do: ["--modify=#{val}"]
 
+  defp modify_perm_arg(true), do: ["--modify=all"]
+  defp modify_perm_arg(false), do: ["--modify=none"]
   defp modify_perm_arg(_), do: []
 
   defp flag_perm_arg(flag, true), do: ["#{flag}=y"]

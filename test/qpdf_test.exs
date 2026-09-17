@@ -416,6 +416,74 @@ defmodule QpdfTest do
       assert Qpdf.encrypted?(dec) == false
     end
 
+    test "encrypts with 128-bit AES by default", %{pdf_binary: pdf_binary} do
+      {:ok, enc} =
+        Qpdf.encrypt(pdf_binary,
+          user_password: "user_128",
+          owner_password: "admin_128",
+          key_length: 128
+        )
+
+      assert Qpdf.encrypted?(enc) == true
+      {:ok, info} = Qpdf.encryption_info(enc)
+      assert info.encrypted == true
+      assert info.r == 4
+      assert info.stream_method =~ "AES"
+
+      {:ok, dec} = Qpdf.decrypt(enc, password: "user_128")
+      assert Qpdf.encrypted?(dec) == false
+    end
+
+    test "rejects 40-bit encryption unless allow_weak_crypto is true", %{pdf_binary: pdf_binary} do
+      assert {:error, :weak_crypto_not_allowed} = Qpdf.encrypt(pdf_binary, key_length: 40)
+
+      {:ok, enc} =
+        Qpdf.encrypt(pdf_binary,
+          user_password: "user_40",
+          owner_password: "admin_40",
+          key_length: 40,
+          allow_weak_crypto: true,
+          print: :none,
+          modify: :none
+        )
+
+      assert Qpdf.encrypted?(enc) == true
+      {:ok, info} = Qpdf.encryption_info(enc)
+      assert info.encrypted == true
+      assert info.r == 2
+
+      {:ok, dec} = Qpdf.decrypt(enc, password: "user_40")
+      assert Qpdf.encrypted?(dec) == false
+    end
+
+    test "rejects 128-bit RC4 encryption unless allow_weak_crypto is true", %{
+      pdf_binary: pdf_binary
+    } do
+      assert {:error, :weak_crypto_not_allowed} =
+               Qpdf.encrypt(pdf_binary, key_length: 128, use_aes: false)
+
+      {:ok, enc} =
+        Qpdf.encrypt(pdf_binary,
+          user_password: "user_rc4",
+          owner_password: "admin_rc4",
+          key_length: 128,
+          use_aes: false,
+          allow_weak_crypto: true
+        )
+
+      assert Qpdf.encrypted?(enc) == true
+      {:ok, info} = Qpdf.encryption_info(enc)
+      assert info.encrypted == true
+      assert info.r == 3
+
+      {:ok, dec} = Qpdf.decrypt(enc, password: "user_rc4")
+      assert Qpdf.encrypted?(dec) == false
+    end
+
+    test "returns :invalid_key_length for unsupported key length", %{pdf_binary: pdf_binary} do
+      assert {:error, :invalid_key_length} = Qpdf.encrypt(pdf_binary, key_length: 512)
+    end
+
     test "returns :enoent for non-existent file" do
       assert {:error, :enoent} = Qpdf.encrypt({:file, "/non/existent.pdf"})
       assert {:error, :enoent} = Qpdf.decrypt({:file, "/non/existent.pdf"})

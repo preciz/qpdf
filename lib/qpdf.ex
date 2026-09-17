@@ -423,7 +423,9 @@ defmodule Qpdf do
   ## Options
     * `:user_password` - password required to open the PDF (default: `""`)
     * `:owner_password` - password required to modify permissions (default: `""`)
-    * `:key_length` - encryption key length: `40`, `128`, or `256` (default: `256`)
+    * `:key_length` - encryption key length: `40` (requires `allow_weak_crypto: true`), `128`, or `256` (default: `256`)
+    * `:use_aes` - boolean, use AES encryption for 128-bit keys (default: `true`)
+    * `:allow_weak_crypto` - boolean, allow writing insecure/legacy encryption (required for `key_length: 40` or 128-bit RC4, default: `false`)
     * `:print` - print permission: `:none`, `:low`, or `:full`
     * `:modify` - modification permission: `:none`, `:assembly`, `:form`, `:annotate`, or `:all`
     * `:extract` - boolean, allow text/graphic extraction
@@ -441,11 +443,12 @@ defmodule Qpdf do
   """
   @spec encrypt(input(), keyword()) :: {:ok, binary() | Path.t()} | {:error, any()}
   def encrypt(input, opts \\ []) do
-    with_input_path(input, fn in_file ->
-      encrypt_args = Encryption.build_encrypt_args(opts)
-      args = [in_file, "--no-warn", "--warning-exit-0"] ++ encrypt_args
-      run_qpdf_into(args, opts)
-    end)
+    with {:ok, encrypt_args} <- Encryption.build_encrypt_args(opts) do
+      with_input_path(input, fn in_file ->
+        args = [in_file, "--no-warn", "--warning-exit-0"] ++ encrypt_args
+        run_qpdf_into(args, opts)
+      end)
+    end
   end
 
   @doc """
