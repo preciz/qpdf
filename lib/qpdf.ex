@@ -38,14 +38,12 @@ defmodule Qpdf do
       in_file = Path.join(dir, "original.pdf")
       File.write!(in_file, binary)
 
-      out_file = Path.join(dir, "pages.pdf")
-
       args =
         [in_file | @default_opts] ++
-          ["--pages", in_file, spec_str, "--", out_file]
+          ["--pages", in_file, spec_str, "--", "-"]
 
       case run_qpdf(args) do
-        {_, 0} -> File.read(out_file)
+        {output, 0} -> {:ok, output}
         other -> {:error, other}
       end
     end)
