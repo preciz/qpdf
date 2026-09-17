@@ -686,6 +686,27 @@ defmodule QpdfTest do
       assert File.exists?(file1)
     end
 
+    test "repeated splits into the same directory return only files from current invocation", %{
+      pdf_file: pdf_file
+    } do
+      dest_dir =
+        Path.join(System.tmp_dir!(), "split_stale_#{Base.encode16(:crypto.strong_rand_bytes(4))}")
+
+      on_exit(fn -> File.rm_rf(dest_dir) end)
+
+      # First split 14 pages into groups of 4 (creates 4 files: page-01 to page-04)
+      assert {:ok, groups} = Qpdf.split_pages({:file, pdf_file}, 4, into: dest_dir)
+      assert length(groups) == 4
+
+      # Extract a single-page PDF
+      assert {:ok, single_page} = Qpdf.pages({:file, pdf_file}, 1)
+
+      # Split the single page into the same directory; must return only 1 file
+      assert {:ok, single_files} = Qpdf.split_pages(single_page, into: dest_dir)
+      assert length(single_files) == 1
+      assert Enum.all?(single_files, &File.exists?/1)
+    end
+
     test "returns error for invalid into option", %{pdf_binary: pdf_binary} do
       assert {:error, :invalid_destination} = Qpdf.pages(pdf_binary, 1, into: :unsupported)
       assert {:error, :invalid_destination} = Qpdf.split_pages(pdf_binary, into: :unsupported)

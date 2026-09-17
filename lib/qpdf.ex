@@ -209,8 +209,8 @@ defmodule Qpdf do
       when is_integer(pages_per_group) and pages_per_group > 0 and is_list(opts) do
     case Keyword.get(opts, :into, :memory) do
       :memory ->
-        with_input_and_output_dir(input, fn in_file, dir ->
-          do_split_pages(in_file, dir, pages_per_group, :memory)
+        with_input_path(input, fn in_file ->
+          do_split_pages(in_file, nil, pages_per_group, :memory)
         end)
 
       {:dir, dir_path} when is_binary(dir_path) ->
@@ -1161,29 +1161,48 @@ defmodule Qpdf do
     {:ok, expanded, {:file, expanded}}
   end
 
-  defp do_split_pages(in_file, dir, pages_per_group, mode) do
-    out_pattern = Path.join(dir, "page.pdf")
+  defp do_split_pages(in_file, dest_dir, pages_per_group, mode) do
+    with_tmp_dir(fn staging_dir ->
+      out_pattern = Path.join(staging_dir, "page.pdf")
+      split_arg = split_pages_arg(pages_per_group)
+      args = @default_opts ++ [split_arg, in_file, out_pattern]
 
-    split_arg =
-      if pages_per_group == 1 do
-        "--split-pages"
-      else
-        "--split-pages=#{pages_per_group}"
+      case run_qpdf(args) do
+        {_, 0} ->
+          format_split_output(list_page_files(staging_dir), dest_dir, mode)
+
+        other ->
+          {:error, other}
       end
+    end)
+  end
 
-    args = @default_opts ++ [split_arg, in_file, out_pattern]
+  defp split_pages_arg(1), do: "--split-pages"
+  defp split_pages_arg(pages_per_group), do: "--split-pages=#{pages_per_group}"
 
-    case run_qpdf(args) do
-      {_, 0} ->
-        files = list_page_files(dir)
+  defp format_split_output(staged_files, _dest_dir, :memory) do
+    {:ok, Enum.map(staged_files, &File.read!/1)}
+  end
 
-        case mode do
-          :memory -> {:ok, Enum.map(files, &File.read!/1)}
-          :paths -> {:ok, files}
-        end
+  defp format_split_output(staged_files, dest_dir, :paths) do
+    dest_files =
+      Enum.map(staged_files, fn staged_file ->
+        dest_path = Path.join(dest_dir, Path.basename(staged_file))
+        move_file!(staged_file, dest_path)
+        dest_path
+      end)
 
-      other ->
-        {:error, other}
+    {:ok, dest_files}
+  end
+
+  defp move_file!(src, dest) do
+    case File.rename(src, dest) do
+      :ok ->
+        :ok
+
+      {:error, _reason} ->
+        File.cp!(src, dest)
+        File.rm!(src)
     end
   end
 
