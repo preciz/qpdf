@@ -249,6 +249,35 @@ defmodule QpdfTest do
     end
   end
 
+  describe "linearize/1 and linearized?/1" do
+    test "checks non-linearized PDF", %{pdf_binary: pdf_binary, pdf_file: pdf_file} do
+      assert Qpdf.linearized?(pdf_binary) == false
+      assert Qpdf.linearized?({:file, pdf_file}) == false
+    end
+
+    test "linearizes a PDF and verifies it is linearized", %{
+      pdf_binary: pdf_binary,
+      pdf_file: pdf_file
+    } do
+      {:ok, lin_bin} = Qpdf.linearize(pdf_binary)
+      assert Qpdf.linearized?(lin_bin) == true
+      assert page_count!(lin_bin) == 14
+
+      {:ok, lin_file} = Qpdf.linearize({:file, pdf_file})
+      assert Qpdf.linearized?(lin_file) == true
+    end
+
+    test "returns :enoent for non-existent file" do
+      assert {:error, :enoent} = Qpdf.linearized?({:file, "/non/existent.pdf"})
+      assert {:error, :enoent} = Qpdf.linearize({:file, "/non/existent.pdf"})
+    end
+
+    test "returns :invalid_input for invalid input" do
+      assert {:error, :invalid_input} = Qpdf.linearized?(12345)
+      assert {:error, :invalid_input} = Qpdf.linearize(12345)
+    end
+  end
+
   describe "check/1" do
     test "returns :ok for valid PDF", %{pdf_binary: pdf_binary, pdf_file: pdf_file} do
       assert :ok = Qpdf.check(pdf_binary)

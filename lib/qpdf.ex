@@ -279,6 +279,56 @@ defmodule Qpdf do
   end
 
   @doc """
+  Checks whether the given PDF is linearized (optimized for Fast Web View).
+
+  Uses `qpdf --check-linearization`.
+  Returns `true` if linearized, `false` if not linearized, or `{:error, reason}` on failure.
+  """
+  @spec linearized?(input()) :: boolean() | {:error, any()}
+  def linearized?(input) do
+    with_input_path(input, fn in_file ->
+      case run_qpdf(["--check-linearization", in_file]) do
+        {output, 0} ->
+          cond do
+            String.contains?(output, "no linearization errors") -> true
+            String.contains?(output, "not linearized") -> false
+            true -> false
+          end
+
+        other ->
+          {:error, other}
+      end
+    end)
+  end
+
+  @doc """
+  Optimizes a PDF for Fast Web View (linearization).
+
+  A linearized PDF enables viewers to display page 1 immediately over HTTP
+  while the remainder of the document continues downloading.
+
+  Outputs the linearized PDF directly to standard output without intermediate disk files.
+
+  ## Parameters
+    - input: The PDF as a binary or `{:file, path}`
+
+  ## Returns
+    - `{:ok, binary}` on success
+    - `{:error, any}` on failure
+  """
+  @spec linearize(input()) :: {:ok, binary()} | {:error, any()}
+  def linearize(input) do
+    with_input_path(input, fn in_file ->
+      args = [in_file | @default_opts] ++ ["--linearize", "--", "-"]
+
+      case run_qpdf(args) do
+        {output, 0} -> {:ok, output}
+        other -> {:error, other}
+      end
+    end)
+  end
+
+  @doc """
   Checks whether the PDF file is syntactically valid.
 
   Uses `qpdf --check`.
