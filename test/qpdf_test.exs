@@ -491,6 +491,162 @@ defmodule QpdfTest do
     end
   end
 
+  describe ":into destination option" do
+    test "writes pages directly to file", %{pdf_binary: pdf_binary, pdf_file: pdf_file} do
+      dest1 =
+        Path.join(
+          System.tmp_dir!(),
+          "out_pages_1_#{Base.encode16(:crypto.strong_rand_bytes(4))}.pdf"
+        )
+
+      dest2 =
+        Path.join(
+          System.tmp_dir!(),
+          "out_pages_2_#{Base.encode16(:crypto.strong_rand_bytes(4))}.pdf"
+        )
+
+      on_exit(fn ->
+        File.rm(dest1)
+        File.rm(dest2)
+      end)
+
+      assert {:ok, ^dest1} = Qpdf.pages(pdf_binary, 1..2, into: dest1)
+      assert File.exists?(dest1)
+      assert page_count!({:file, dest1}) == 2
+
+      assert {:ok, ^dest2} = Qpdf.page({:file, pdf_file}, 1, into: {:file, dest2})
+      assert File.exists?(dest2)
+      assert page_count!({:file, dest2}) == 1
+    end
+
+    test "merges directly to file", %{pdf_file: pdf_file} do
+      dest =
+        Path.join(
+          System.tmp_dir!(),
+          "out_merged_#{Base.encode16(:crypto.strong_rand_bytes(4))}.pdf"
+        )
+
+      on_exit(fn -> File.rm(dest) end)
+
+      assert {:ok, ^dest} = Qpdf.merge([{:file, pdf_file}, {:file, pdf_file}], into: dest)
+      assert File.exists?(dest)
+      assert page_count!({:file, dest}) == 28
+    end
+
+    test "rotates directly to file", %{pdf_file: pdf_file} do
+      dest =
+        Path.join(
+          System.tmp_dir!(),
+          "out_rotated_#{Base.encode16(:crypto.strong_rand_bytes(4))}.pdf"
+        )
+
+      on_exit(fn -> File.rm(dest) end)
+
+      assert {:ok, ^dest} = Qpdf.rotate({:file, pdf_file}, 90, 1, into: dest)
+      assert File.exists?(dest)
+      assert page_count!({:file, dest}) == 14
+    end
+
+    test "overlays and underlays directly to file", %{pdf_binary: pdf_binary} do
+      {:ok, page1} = Qpdf.page(pdf_binary, 1)
+
+      dest_ov =
+        Path.join(System.tmp_dir!(), "out_ov_#{Base.encode16(:crypto.strong_rand_bytes(4))}.pdf")
+
+      dest_un =
+        Path.join(System.tmp_dir!(), "out_un_#{Base.encode16(:crypto.strong_rand_bytes(4))}.pdf")
+
+      on_exit(fn ->
+        File.rm(dest_ov)
+        File.rm(dest_un)
+      end)
+
+      assert {:ok, ^dest_ov} = Qpdf.overlay(pdf_binary, page1, into: dest_ov)
+      assert File.exists?(dest_ov)
+
+      assert {:ok, ^dest_un} = Qpdf.underlay(pdf_binary, page1, into: dest_un)
+      assert File.exists?(dest_un)
+    end
+
+    test "linearizes and optimizes directly to file", %{pdf_file: pdf_file} do
+      dest_lin =
+        Path.join(System.tmp_dir!(), "out_lin_#{Base.encode16(:crypto.strong_rand_bytes(4))}.pdf")
+
+      dest_opt =
+        Path.join(System.tmp_dir!(), "out_opt_#{Base.encode16(:crypto.strong_rand_bytes(4))}.pdf")
+
+      on_exit(fn ->
+        File.rm(dest_lin)
+        File.rm(dest_opt)
+      end)
+
+      assert {:ok, ^dest_lin} = Qpdf.linearize({:file, pdf_file}, into: dest_lin)
+      assert File.exists?(dest_lin)
+      assert Qpdf.linearized?({:file, dest_lin}) == true
+
+      assert {:ok, ^dest_opt} = Qpdf.optimize({:file, pdf_file}, into: dest_opt)
+      assert File.exists?(dest_opt)
+    end
+
+    test "encrypts and decrypts directly to file", %{pdf_file: pdf_file} do
+      dest_enc =
+        Path.join(System.tmp_dir!(), "out_enc_#{Base.encode16(:crypto.strong_rand_bytes(4))}.pdf")
+
+      dest_dec =
+        Path.join(System.tmp_dir!(), "out_dec_#{Base.encode16(:crypto.strong_rand_bytes(4))}.pdf")
+
+      on_exit(fn ->
+        File.rm(dest_enc)
+        File.rm(dest_dec)
+      end)
+
+      assert {:ok, ^dest_enc} =
+               Qpdf.encrypt({:file, pdf_file}, user_password: "foo", into: dest_enc)
+
+      assert File.exists?(dest_enc)
+      assert Qpdf.encrypted?({:file, dest_enc}) == true
+
+      assert {:ok, ^dest_dec} = Qpdf.decrypt({:file, dest_enc}, password: "foo", into: dest_dec)
+      assert File.exists?(dest_dec)
+      assert Qpdf.encrypted?({:file, dest_dec}) == false
+    end
+
+    test "splits pages directly to directory without loading binaries into memory", %{
+      pdf_file: pdf_file
+    } do
+      dest_dir1 =
+        Path.join(System.tmp_dir!(), "split_dir_1_#{Base.encode16(:crypto.strong_rand_bytes(4))}")
+
+      dest_dir2 =
+        Path.join(System.tmp_dir!(), "split_dir_2_#{Base.encode16(:crypto.strong_rand_bytes(4))}")
+
+      on_exit(fn ->
+        File.rm_rf(dest_dir1)
+        File.rm_rf(dest_dir2)
+      end)
+
+      assert {:ok, files} = Qpdf.split_pages({:file, pdf_file}, into: dest_dir1)
+      assert length(files) == 14
+      assert Enum.all?(files, &File.exists?/1)
+      assert Enum.all?(files, &is_binary/1)
+
+      assert {:ok, groups} = Qpdf.split_pages({:file, pdf_file}, 5, into: {:dir, dest_dir2})
+      assert length(groups) == 3
+      assert Enum.all?(groups, &File.exists?/1)
+
+      assert {:ok, indexed} = Qpdf.split({:file, pdf_file}, into: dest_dir1)
+      assert length(indexed) == 14
+      assert [{1, file1} | _] = indexed
+      assert is_binary(file1)
+      assert File.exists?(file1)
+    end
+
+    test "returns error for invalid into option", %{pdf_binary: pdf_binary} do
+      assert {:error, :invalid_destination} = Qpdf.pages(pdf_binary, 1, into: :unsupported)
+      assert {:error, :invalid_destination} = Qpdf.split_pages(pdf_binary, into: :unsupported)
+    end
+  end
+
   describe "tmp_dir/0" do
     test "returns default tmp dir or configured value" do
       assert Qpdf.tmp_dir() == System.tmp_dir!()

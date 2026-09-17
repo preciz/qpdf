@@ -37,33 +37,27 @@ defmodule Qpdf do
     - page_spec: An integer, range, list of pages, or selection string
 
   ## Returns
-    - `{:ok, binary}` on success
+    - `{:ok, binary | Path.t()}` on success
     - `{:error, any}` on failure
   """
-  @spec pages(input(), integer() | Range.t() | list() | String.t()) ::
-          {:ok, binary} | {:error, any}
-  def pages(input, page_spec) do
+  @spec pages(input(), integer() | Range.t() | list() | String.t(), keyword()) ::
+          {:ok, binary() | Path.t()} | {:error, any}
+  def pages(input, page_spec, opts \\ []) do
     spec_str = format_page_spec(page_spec)
 
     with_input_path(input, fn in_file ->
-      args =
-        [in_file | @default_opts] ++
-          ["--pages", in_file, spec_str, "--", "-"]
-
-      case run_qpdf(args) do
-        {output, 0} -> {:ok, output}
-        other -> {:error, other}
-      end
+      args = [in_file | @default_opts] ++ ["--pages", in_file, spec_str]
+      run_qpdf_into(args, opts)
     end)
   end
 
   @doc """
   Extracts a specific page or range from a PDF.
-  Delegate to `pages/2`.
+  Delegate to `pages/3`.
   """
-  @spec page(input(), integer() | Range.t() | list() | String.t()) ::
-          {:ok, binary} | {:error, any}
-  def page(input, page_spec), do: pages(input, page_spec)
+  @spec page(input(), integer() | Range.t() | list() | String.t(), keyword()) ::
+          {:ok, binary() | Path.t()} | {:error, any}
+  def page(input, page_spec, opts \\ []), do: pages(input, page_spec, opts)
 
   @doc """
   Merges multiple PDFs into a single document.
@@ -72,15 +66,15 @@ defmodule Qpdf do
     * an `input` (binary or `{:file, path}`) to include all its pages
     * a `{input, page_spec}` tuple to include only specific pages or ranges
 
-  Outputs the merged PDF directly to standard output without intermediate disk files.
+  Outputs the merged PDF directly to memory or a file specified with `into:`.
 
   ## Examples
 
-      # Merge multiple binaries
+      # Merge multiple binaries into memory
       {:ok, merged} = Qpdf.merge([pdf1, pdf2])
 
-      # Merge files directly from disk without reading them into memory
-      {:ok, merged} = Qpdf.merge([{:file, "cover.pdf"}, {:file, "body.pdf"}])
+      # Merge files directly to a destination path without loading bytes into BEAM memory
+      {:ok, path} = Qpdf.merge([{:file, "cover.pdf"}, {:file, "body.pdf"}], into: "merged.pdf")
 
       # Merge specific page selections from different documents
       {:ok, merged} = Qpdf.merge([
@@ -88,9 +82,9 @@ defmodule Qpdf do
         {appendix_binary, "1-z:even"}
       ])
   """
-  @spec merge([input() | {input(), integer() | Range.t() | list() | String.t()}]) ::
-          {:ok, binary()} | {:error, any()}
-  def merge(inputs) when is_list(inputs) do
+  @spec merge([input() | {input(), integer() | Range.t() | list() | String.t()}], keyword()) ::
+          {:ok, binary() | Path.t()} | {:error, any()}
+  def merge(inputs, opts \\ []) when is_list(inputs) do
     if Enum.empty?(inputs) do
       {:error, :empty_inputs}
     else
@@ -101,12 +95,8 @@ defmodule Qpdf do
             {path, spec} -> [path, format_page_spec(spec)]
           end)
 
-        args = ["--empty" | @default_opts] ++ ["--pages" | pages_args] ++ ["--", "-"]
-
-        case run_qpdf(args) do
-          {output, 0} -> {:ok, output}
-          other -> {:error, other}
-        end
+        args = ["--empty" | @default_opts] ++ ["--pages" | pages_args]
+        run_qpdf_into(args, opts)
       end)
     end
   end
@@ -131,20 +121,13 @@ defmodule Qpdf do
       # Rotate a range of pages
       {:ok, rotated} = Qpdf.rotate(input, 90, 1..5)
   """
-  @spec rotate(input(), integer() | String.t(), any()) ::
-          {:ok, binary()} | {:error, any()}
-  def rotate(input, angle, page_spec \\ :all) do
+  @spec rotate(input(), integer() | String.t(), any(), keyword()) ::
+          {:ok, binary() | Path.t()} | {:error, any()}
+  def rotate(input, angle, page_spec \\ :all, opts \\ []) do
     with_input_path(input, fn in_file ->
       rotate_arg = format_rotate_arg(angle, page_spec)
-
-      args =
-        [in_file | @default_opts] ++
-          [rotate_arg, "--", "-"]
-
-      case run_qpdf(args) do
-        {output, 0} -> {:ok, output}
-        other -> {:error, other}
-      end
+      args = [in_file | @default_opts] ++ [rotate_arg]
+      run_qpdf_into(args, opts)
     end)
   end
 
@@ -168,7 +151,7 @@ defmodule Qpdf do
       # Apply a stamp to page 1 only
       {:ok, stamped} = Qpdf.overlay(doc, stamp_pdf, to: 1)
   """
-  @spec overlay(input(), input(), keyword()) :: {:ok, binary()} | {:error, any()}
+  @spec overlay(input(), input(), keyword()) :: {:ok, binary() | Path.t()} | {:error, any()}
   def overlay(input, overlay_input, opts \\ []) do
     apply_layer(input, :overlay, overlay_input, opts)
   end
@@ -184,13 +167,14 @@ defmodule Qpdf do
     * `:from` - page specification on the underlay document
     * `:repeat` - repeat underlay pages (e.g. `"1-z"` or `true` to repeat all pages)
     * `:password` - password for the underlay document if encrypted
+    * `:into` - destination: `:memory` (default) or `path` / `{:file, path}`
 
   ## Examples
 
       # Apply a background letterhead across all pages
       {:ok, with_letterhead} = Qpdf.underlay(doc, letterhead_pdf, repeat: true)
   """
-  @spec underlay(input(), input(), keyword()) :: {:ok, binary()} | {:error, any()}
+  @spec underlay(input(), input(), keyword()) :: {:ok, binary() | Path.t()} | {:error, any()}
   def underlay(input, underlay_input, opts \\ []) do
     apply_layer(input, :underlay, underlay_input, opts)
   end
@@ -204,53 +188,62 @@ defmodule Qpdf do
   Grouping happens inside a single `qpdf` execution, so splitting a large PDF into
   multiple chunks costs only one process invocation.
 
-  ## Parameters
-    - input: The PDF as a binary or `{:file, path}`
-    - pages_per_group: Maximum number of pages per output part (default: 1)
+  ## Options
+    * `:into` - destination directory: `:memory` (default, returns `[binary]`) or
+      `path` / `{:dir, path}` (returns `[Path.t()]` without loading files into memory)
 
   ## Returns
-    - `{:ok, [binary]}` on success, in page order
+    - `{:ok, [binary] | [Path.t()]}` on success, in page order
     - `{:error, any}` on failure
   """
-  @spec split_pages(input(), pos_integer()) :: {:ok, [binary]} | {:error, any}
-  def split_pages(input, pages_per_group \\ 1)
-      when is_integer(pages_per_group) and pages_per_group > 0 do
-    with_input_and_output_dir(input, fn in_file, dir ->
-      out_file = Path.join(dir, "page.pdf")
+  @spec split_pages(input(), pos_integer() | keyword(), keyword()) ::
+          {:ok, [binary()] | [Path.t()]} | {:error, any()}
+  def split_pages(input, opts) when is_list(opts) do
+    pages_per_group = Keyword.get(opts, :pages_per_group, 1)
+    split_pages(input, pages_per_group, opts)
+  end
 
-      split_arg =
-        if pages_per_group == 1 do
-          "--split-pages"
-        else
-          "--split-pages=#{pages_per_group}"
-        end
+  def split_pages(input, pages_per_group \\ 1, opts \\ [])
 
-      args = @default_opts ++ [split_arg, in_file, out_file]
+  def split_pages(input, pages_per_group, opts)
+      when is_integer(pages_per_group) and pages_per_group > 0 and is_list(opts) do
+    case Keyword.get(opts, :into, :memory) do
+      :memory ->
+        with_input_and_output_dir(input, fn in_file, dir ->
+          do_split_pages(in_file, dir, pages_per_group, :memory)
+        end)
 
-      case run_qpdf(args) do
-        {_, 0} ->
-          groups =
-            dir
-            |> list_page_files()
-            |> Enum.map(&File.read!/1)
+      {:dir, dir_path} when is_binary(dir_path) ->
+        expanded = Path.expand(dir_path)
+        File.mkdir_p!(expanded)
 
-          {:ok, groups}
+        with_input_path(input, fn in_file ->
+          do_split_pages(in_file, expanded, pages_per_group, :paths)
+        end)
 
-        other ->
-          {:error, other}
-      end
-    end)
+      dir_path when is_binary(dir_path) ->
+        expanded = Path.expand(dir_path)
+        File.mkdir_p!(expanded)
+
+        with_input_path(input, fn in_file ->
+          do_split_pages(in_file, expanded, pages_per_group, :paths)
+        end)
+
+      _ ->
+        {:error, :invalid_destination}
+    end
   end
 
   @doc """
   Splits a PDF into individual pages.
 
-  Returns `{:ok, [{page_number, page_binary}]}` where page_number is an integer.
+  Returns `{:ok, [{page_number, page_binary | file_path}]}` where page_number is an integer.
   For a flat list of binaries without page number tuples, use `split_pages/2`.
   """
-  @spec split(input()) :: {:ok, [{non_neg_integer, binary}]} | {:error, any}
-  def split(input) do
-    case split_pages(input, 1) do
+  @spec split(input(), keyword()) ::
+          {:ok, [{non_neg_integer, binary() | Path.t()}]} | {:error, any}
+  def split(input, opts \\ []) do
+    case split_pages(input, 1, opts) do
       {:ok, pages} ->
         indexed =
           pages
@@ -266,11 +259,12 @@ defmodule Qpdf do
 
   @doc """
   Splits a PDF into consecutive groups of at most `pages_per_group` pages.
-  Delegate to `split_pages/2`.
+  Delegate to `split_pages/3`.
   """
-  @spec split_groups(input(), pos_integer) :: {:ok, [binary]} | {:error, any}
-  def split_groups(input, pages_per_group) do
-    split_pages(input, pages_per_group)
+  @spec split_groups(input(), pos_integer, keyword()) ::
+          {:ok, [binary()] | [Path.t()]} | {:error, any}
+  def split_groups(input, pages_per_group, opts \\ []) do
+    split_pages(input, pages_per_group, opts)
   end
 
   @doc """
@@ -359,19 +353,26 @@ defmodule Qpdf do
   ## Parameters
     - input: The PDF as a binary or `{:file, path}`
 
+  @doc \"""
+  Optimizes a PDF for Fast Web View (linearization).
+
+  A linearized PDF enables viewers to display page 1 immediately over HTTP
+  while the remainder of the document continues downloading.
+
+  Outputs the linearized PDF directly to standard output without intermediate disk files.
+
+  ## Options
+    * `:into` - destination: `:memory` (default) or `path` / `{:file, path}`
+
   ## Returns
-    - `{:ok, binary}` on success
+    - `{:ok, binary | Path.t()}` on success
     - `{:error, any}` on failure
   """
-  @spec linearize(input()) :: {:ok, binary()} | {:error, any()}
-  def linearize(input) do
+  @spec linearize(input(), keyword()) :: {:ok, binary() | Path.t()} | {:error, any()}
+  def linearize(input, opts \\ []) do
     with_input_path(input, fn in_file ->
-      args = [in_file | @default_opts] ++ ["--linearize", "--", "-"]
-
-      case run_qpdf(args) do
-        {output, 0} -> {:ok, output}
-        other -> {:error, other}
-      end
+      args = [in_file | @default_opts] ++ ["--linearize"]
+      run_qpdf_into(args, opts)
     end)
   end
 
@@ -387,22 +388,19 @@ defmodule Qpdf do
     * `:stream_data` - `:compress` (default), `:uncompress`, or `:preserve`
     * `:object_streams` - `:generate` (default), `:preserve`, or `:disable`
     * `:recompress_flate` - boolean, whether to recompress flate streams (default: `true`)
+    * `:into` - destination: `:memory` (default) or `path` / `{:file, path}`
 
   ## Examples
 
       {:ok, compressed} = Qpdf.optimize(input)
       {:ok, compressed} = Qpdf.compress(input)
   """
-  @spec optimize(input(), keyword()) :: {:ok, binary()} | {:error, any()}
+  @spec optimize(input(), keyword()) :: {:ok, binary() | Path.t()} | {:error, any()}
   def optimize(input, opts \\ []) do
     with_input_path(input, fn in_file ->
       opt_args = build_optimize_args(opts)
-      args = [in_file | @default_opts] ++ opt_args ++ ["--", "-"]
-
-      case run_qpdf(args) do
-        {output, 0} -> {:ok, output}
-        other -> {:error, other}
-      end
+      args = [in_file | @default_opts] ++ opt_args
+      run_qpdf_into(args, opts)
     end)
   end
 
@@ -410,7 +408,7 @@ defmodule Qpdf do
   Compresses a PDF document to reduce file size.
   Alias for `optimize/2`.
   """
-  @spec compress(input(), keyword()) :: {:ok, binary()} | {:error, any()}
+  @spec compress(input(), keyword()) :: {:ok, binary() | Path.t()} | {:error, any()}
   def compress(input, opts \\ []), do: optimize(input, opts)
 
   @doc """
@@ -427,6 +425,7 @@ defmodule Qpdf do
     * `:extract` - boolean, allow text/graphic extraction
     * `:annotate` - boolean, allow annotations and commenting
     * `:cleartext_metadata` - boolean, keep metadata unencrypted
+    * `:into` - destination: `:memory` (default) or `path` / `{:file, path}`
 
   ## Examples
 
@@ -436,16 +435,12 @@ defmodule Qpdf do
       # Encrypt with restricted permissions
       {:ok, enc} = Qpdf.encrypt(input, owner_password: "admin", print: :none, extract: false)
   """
-  @spec encrypt(input(), keyword()) :: {:ok, binary()} | {:error, any()}
+  @spec encrypt(input(), keyword()) :: {:ok, binary() | Path.t()} | {:error, any()}
   def encrypt(input, opts \\ []) do
     with_input_path(input, fn in_file ->
       encrypt_args = build_encrypt_args(opts)
-      args = [in_file, "--no-warn", "--warning-exit-0"] ++ encrypt_args ++ ["--", "-"]
-
-      case run_qpdf(args) do
-        {output, 0} -> {:ok, output}
-        other -> {:error, other}
-      end
+      args = [in_file, "--no-warn", "--warning-exit-0"] ++ encrypt_args
+      run_qpdf_into(args, opts)
     end)
   end
 
@@ -456,12 +451,13 @@ defmodule Qpdf do
 
   ## Options
     * `:password` - password required to decrypt the document
+    * `:into` - destination: `:memory` (default) or `path` / `{:file, path}`
 
   ## Examples
 
       {:ok, plain_pdf} = Qpdf.decrypt(encrypted_input, password: "secret")
   """
-  @spec decrypt(input(), keyword()) :: {:ok, binary()} | {:error, any()}
+  @spec decrypt(input(), keyword()) :: {:ok, binary() | Path.t()} | {:error, any()}
   def decrypt(input, opts \\ []) do
     with_input_path(input, fn in_file ->
       password_args =
@@ -470,12 +466,8 @@ defmodule Qpdf do
           pass -> ["--password=#{pass}"]
         end
 
-      args = password_args ++ [in_file, "--no-warn", "--warning-exit-0", "--decrypt", "--", "-"]
-
-      case run_qpdf(args) do
-        {output, 0} -> {:ok, output}
-        other -> {:error, other}
-      end
+      args = password_args ++ [in_file, "--no-warn", "--warning-exit-0", "--decrypt"]
+      run_qpdf_into(args, opts)
     end)
   end
 
@@ -688,6 +680,73 @@ defmodule Qpdf do
     System.cmd(qpdf_executable(), args, opts)
   end
 
+  defp run_qpdf_into(args_before_out, opts) do
+    case resolve_output_target(opts) do
+      {:ok, out_target, target_type} ->
+        args = args_before_out ++ ["--", out_target]
+
+        case run_qpdf(args) do
+          {output, 0} ->
+            case target_type do
+              :memory -> {:ok, output}
+              {:file, dest_path} -> {:ok, dest_path}
+            end
+
+          other ->
+            {:error, other}
+        end
+
+      {:error, _} = error ->
+        error
+    end
+  end
+
+  defp resolve_output_target(opts) do
+    case Keyword.get(opts, :into, :memory) do
+      :memory ->
+        {:ok, "-", :memory}
+
+      {:file, path} when is_binary(path) ->
+        expanded = Path.expand(path)
+        File.mkdir_p!(Path.dirname(expanded))
+        {:ok, expanded, {:file, expanded}}
+
+      path when is_binary(path) ->
+        expanded = Path.expand(path)
+        File.mkdir_p!(Path.dirname(expanded))
+        {:ok, expanded, {:file, expanded}}
+
+      _other ->
+        {:error, :invalid_destination}
+    end
+  end
+
+  defp do_split_pages(in_file, dir, pages_per_group, mode) do
+    out_pattern = Path.join(dir, "page.pdf")
+
+    split_arg =
+      if pages_per_group == 1 do
+        "--split-pages"
+      else
+        "--split-pages=#{pages_per_group}"
+      end
+
+    args = @default_opts ++ [split_arg, in_file, out_pattern]
+
+    case run_qpdf(args) do
+      {_, 0} ->
+        files = list_page_files(dir)
+
+        case mode do
+          :memory -> {:ok, Enum.map(files, &File.read!/1)}
+          :paths -> {:ok, files}
+        end
+
+      other ->
+        {:error, other}
+    end
+  end
+
   defp apply_layer(input, type, layer_input, opts) do
     with_layer_inputs(input, layer_input, fn doc_file, layer_file ->
       flag = if type == :overlay, do: "--overlay", else: "--underlay"
@@ -722,12 +781,9 @@ defmodule Qpdf do
 
       args =
         [doc_file | @default_opts] ++
-          [flag, layer_file] ++ layer_opts ++ ["--", "--", "-"]
+          [flag, layer_file] ++ layer_opts ++ ["--"]
 
-      case run_qpdf(args) do
-        {output, 0} -> {:ok, output}
-        other -> {:error, other}
-      end
+      run_qpdf_into(args, opts)
     end)
   end
 
