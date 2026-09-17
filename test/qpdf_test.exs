@@ -784,6 +784,38 @@ defmodule QpdfTest do
       assert {:error, :invalid_input} = Qpdf.add_attachment(12_345, "content")
       assert {:error, _} = Qpdf.attachments("not a pdf")
     end
+
+    test "safely handles path traversal and collision filenames", %{pdf_binary: pdf_binary} do
+      victim_path =
+        Path.join(
+          System.tmp_dir!(),
+          "traversal_victim_#{Base.encode16(:crypto.strong_rand_bytes(4))}.txt"
+        )
+
+      File.rm(victim_path)
+
+      # 1. Path traversal filename must not write outside temp dir
+      {:ok, with_traversal} =
+        Qpdf.add_attachment(pdf_binary, "traversal payload",
+          key: "traversal_key",
+          filename: "../../#{Path.basename(victim_path)}"
+        )
+
+      refute File.exists?(victim_path)
+      assert {:ok, [att]} = Qpdf.attachments(with_traversal)
+      assert att.filename == "../../#{Path.basename(victim_path)}"
+      assert {:ok, "traversal payload"} = Qpdf.extract_attachment(with_traversal, "traversal_key")
+
+      # 2. Collision filename "document.pdf" must not overwrite main input
+      {:ok, with_collision} =
+        Qpdf.add_attachment(pdf_binary, "collision payload",
+          key: "collision_key",
+          filename: "document.pdf"
+        )
+
+      assert page_count!(with_collision) == 14
+      assert {:ok, "collision payload"} = Qpdf.extract_attachment(with_collision, "collision_key")
+    end
   end
 
   describe "dimensions/1 and dimensions/2" do

@@ -815,7 +815,7 @@ defmodule Qpdf do
 
             run_qpdf_into(args, opts)
           end,
-          {"document.pdf", filename}
+          {"document.pdf", "attachment.bin"}
         )
 
       {:error, :enoent} = err ->
