@@ -395,6 +395,44 @@ defmodule Qpdf do
   end
 
   @doc """
+  Extracts structural metadata, outlines, page details, and object trees as a decoded JSON map.
+
+  Uses `qpdf --json`.
+  Decodes the JSON output into native Elixir maps and lists using the standard library `JSON` module.
+
+  ## Parameters
+    - input: The PDF as a binary or `{:file, path}`
+
+  ## Returns
+    - `{:ok, map}` on success
+    - `{:error, any}` on failure
+  """
+  @spec json(input()) :: {:ok, map()} | {:error, any()}
+  def json(input) do
+    with_input_path(input, fn in_file ->
+      args = @default_opts ++ ["--json", in_file]
+
+      case run_qpdf(args) do
+        {output, 0} ->
+          case JSON.decode(output) do
+            {:ok, data} -> {:ok, data}
+            {:error, reason} -> {:error, {:invalid_json, reason}}
+          end
+
+        other ->
+          {:error, other}
+      end
+    end)
+  end
+
+  @doc """
+  Extracts document metadata and structure as a map.
+  Alias for `json/1`.
+  """
+  @spec metadata(input()) :: {:ok, map()} | {:error, any()}
+  def metadata(input), do: json(input)
+
+  @doc """
   Checks whether the PDF file is syntactically valid.
 
   Uses `qpdf --check`.

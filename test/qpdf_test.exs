@@ -338,6 +338,39 @@ defmodule QpdfTest do
     end
   end
 
+  describe "json/1 and metadata/1" do
+    test "decodes JSON structure from binary", %{pdf_binary: pdf_binary} do
+      {:ok, data} = Qpdf.json(pdf_binary)
+      assert is_map(data)
+      assert Map.has_key?(data, "version")
+      assert Map.has_key?(data, "pages")
+      assert length(data["pages"]) == 14
+
+      {:ok, meta} = Qpdf.metadata(pdf_binary)
+      assert meta == data
+    end
+
+    test "decodes JSON structure with {:file, path}", %{pdf_file: pdf_file} do
+      {:ok, data} = Qpdf.json({:file, pdf_file})
+      assert is_map(data)
+      assert length(data["pages"]) == 14
+    end
+
+    test "returns :enoent for non-existent file" do
+      assert {:error, :enoent} = Qpdf.json({:file, "/non/existent.pdf"})
+      assert {:error, :enoent} = Qpdf.metadata({:file, "/non/existent.pdf"})
+    end
+
+    test "returns :invalid_input for invalid input" do
+      assert {:error, :invalid_input} = Qpdf.json(12345)
+      assert {:error, :invalid_input} = Qpdf.metadata(12345)
+    end
+
+    test "returns error for non-PDF input" do
+      assert {:error, _} = Qpdf.json("not a pdf")
+    end
+  end
+
   describe "check/1" do
     test "returns :ok for valid PDF", %{pdf_binary: pdf_binary, pdf_file: pdf_file} do
       assert :ok = Qpdf.check(pdf_binary)
