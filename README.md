@@ -4,24 +4,12 @@ An Elixir wrapper for the [`qpdf`](https://github.com/qpdf/qpdf) command-line to
 
 ## Features
 
-- **Input Flexibility**: All functions accept either an in-memory `binary` or `{:file, path}`. When using `{:file, path}`, operations avoid loading the document into BEAM memory or writing redundant temporary copies to disk.
-- **Output Destination Polymorphism (`:into`)**: All generation and transformation functions accept `into: :memory` (default), `into: "path/to/file.pdf"`, or `into: {:file, "path/to/file.pdf"}`. When writing directly to disk, bytes are streamed from `qpdf` directly to the target file with zero BEAM memory consumption.
-- **`Qpdf.pages/3`**: Extracts pages or page ranges from a PDF (supports single pages, Elixir ranges `1..5`, page lists, or qpdf range syntax), streaming output directly to memory or a file.
-- **`Qpdf.merge/2`**: Combines multiple PDFs and page selections into a single document in a single execution.
-- **`Qpdf.rotate/3,4`**: Rotates all pages or specific page ranges by any multiple of 90 degrees.
-- **`Qpdf.overlay/3` & `underlay/3`**: Overlays foreground watermarks/stamps or underlays background letterheads and stationery with optional page repeat.
-- **`Qpdf.optimize/2` & `compress/2`**: Reduces PDF file size by compressing uncompressed streams, packing objects into compressed object streams, and recompressing Flate streams.
-- **`Qpdf.attachments/1`, `add_attachment/3`, `extract_attachment/3`, `remove_attachment/3`**: Full support for PDF embedded files (Factur-X / ZUGFeRD e-invoices, audit logs, XML/CSV attachments) with zero-RAM extraction and insertion.
-- **`Qpdf.dimensions/1,2`**: Inspects page geometry, bounding boxes (MediaBox, CropBox), width/height in points, visual orientation (`:portrait`, `:landscape`, `:square`), and detects standard paper sizes (`A4`, `Letter`, etc.).
-- **`Qpdf.linearize/2` & `linearized?/1`**: Optimizes PDFs for Fast Web View (page-at-a-time streaming over HTTP) and verifies linearization status.
-- **`Qpdf.encrypt/2` & `decrypt/2`**: Applies password protection and permission restrictions (printing, extraction, form filling) or removes encryption.
-- **`Qpdf.json/1,2` (or `metadata/1,2`**: Parses the complete document structure, outlines/bookmarks, and page geometry as native Elixir data (supports `--json` schema version 1 and 2).
-- **`Qpdf.split_pages/2,3`**: Splits a PDF into individual single-page documents or consecutive multi-page chunks in a single pass directly into memory or disk directories.
-- **`Qpdf.page_count/1`**: Quickly returns the page count of a PDF without splitting it (reads only the page tree).
-- **`Qpdf.encrypted?/1`**: Checks whether a PDF is password-protected or encrypted.
-- **`Qpdf.check/1`**: Validates the syntax and structural integrity of a PDF.
-- **`Qpdf.page_size_vector/1`**: Returns a list of byte sizes for each page in a PDF without loading all page binaries into memory.
-- **`Qpdf.executable_path/0`**: Returns the path to the resolved or installed `qpdf` executable.
+- **Flexible I/O & Zero-RAM Pipelines**: Accept in-memory `binary` or `{:file, path}` inputs, and stream outputs directly to memory or disk files (`into: path`) without heap overhead.
+- **Page Manipulation**: Merge, split, rotate, extract, and reorder pages or page ranges using native ranges, lists, or qpdf spec strings.
+- **Watermarks & Layers**: Apply foreground stamps/overlays and background letterheads/stationery with page-targeting and repetition.
+- **Optimization & Security**: Compress streams and object streams, linearize for Fast Web View, and manage encryption, passwords, and permissions.
+- **Embedded Files & Geometry**: Embed, extract, list, and remove attachments (Factur-X / ZUGFeRD e-invoices, XML, CSV), and inspect page geometry, bounding boxes, and dimensions.
+- **Zero-Setup Distribution**: Automatically downloads and extracts pre-built official `qpdf` binaries on Linux x86_64, or uses the system executable.
 
 ## Requirements
 
@@ -196,11 +184,13 @@ IO.inspect(sizes) # e.g., [12345, 67890, ...]
 
 ## Backward Compatibility
 
-The original functions remain available as aliases/delegates:
-- `Qpdf.page/2` delegates to `Qpdf.pages/2`.
-- `Qpdf.split/1` returns `{:ok, [{page_number, page_binary}]}`.
-- `Qpdf.split_groups/2` delegates to `Qpdf.split_pages/2`.
+Convenience aliases and delegates are available across the API:
+- `Qpdf.page/2,3` delegates to `Qpdf.pages/3`.
+- `Qpdf.split/1,2` delegates to `Qpdf.split_pages/3` and returns `{:ok, [{page_number, page_output}]}`.
+- `Qpdf.split_groups/2,3` delegates to `Qpdf.split_pages/3`.
 - `Qpdf.show_npages/1` is an alias for `Qpdf.page_count/1`.
+- `Qpdf.metadata/1,2` is an alias for `Qpdf.json/1,2`.
+- `Qpdf.compress/1,2` is an alias for `Qpdf.optimize/1,2`.
 
 ## Running Tests
 
