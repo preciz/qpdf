@@ -6,7 +6,7 @@ An Elixir wrapper for the [`qpdf`](https://github.com/qpdf/qpdf) command-line to
 
 ## Features
 
-- **Flexible I/O & Zero-RAM Pipelines**: Accept in-memory `binary` or `{:file, path}` inputs, and stream outputs directly to memory or disk files (`into: path`) without heap overhead.
+- **Flexible I/O & Zero-RAM Pipelines**: Accept in-memory `binary` or `{:file, path}` inputs. Run file-to-file operations (`{:file, path}` with `into: path`) directly on disk with zero BEAM heap overhead, or stream outputs directly to memory.
 - **Page Manipulation**: Merge, split, rotate, extract, and reorder pages or page ranges using native ranges, lists, or qpdf spec strings.
 - **Watermarks & Layers**: Apply foreground stamps/overlays and background letterheads/stationery with page-targeting and repetition.
 - **Optimization & Security**: Compress streams and object streams, linearize for Fast Web View, and manage encryption, passwords, and permissions.
@@ -74,7 +74,7 @@ config :qpdf, tmp_dir: "/mnt/scratch"
 
 ## Usage
 
-All operations accept either an in-memory `binary` or a file path `{:file, "path/to/doc.pdf"}`. Every generation and transformation function also accepts the `:into` option to stream output directly into a target file without loading it into BEAM memory.
+All operations accept either an in-memory `binary` (temporarily staged to disk for processing) or a file path `{:file, "path/to/doc.pdf"}`. Every generation and transformation function also accepts the `:into` option to write output directly into a target file without loading it into BEAM memory.
 
 ```elixir
 # Inputs can be in-memory binaries:
