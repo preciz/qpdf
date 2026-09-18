@@ -319,7 +319,7 @@ defmodule QpdfTest do
     end
   end
 
-  describe "optimize/2 and compress/1" do
+  describe "optimize/2" do
     test "optimizes and compresses PDF binary", %{pdf_binary: pdf_binary} do
       {:ok, opt} = Qpdf.optimize(pdf_binary)
       assert byte_size(opt) < byte_size(pdf_binary)
@@ -527,7 +527,7 @@ defmodule QpdfTest do
     end
   end
 
-  describe "json/1 and metadata/1" do
+  describe "json/1" do
     test "decodes JSON structure from binary", %{pdf_binary: pdf_binary} do
       {:ok, data} = Qpdf.json(pdf_binary)
       assert is_map(data)
