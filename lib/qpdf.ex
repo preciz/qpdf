@@ -322,17 +322,6 @@ defmodule Qpdf do
 
   Outputs the linearized PDF directly to standard output without intermediate disk files.
 
-  ## Parameters
-    - input: The PDF as a binary or `{:file, path}`
-
-  @doc \"""
-  Optimizes a PDF for Fast Web View (linearization).
-
-  A linearized PDF enables viewers to display page 1 immediately over HTTP
-  while the remainder of the document continues downloading.
-
-  Outputs the linearized PDF directly to standard output without intermediate disk files.
-
   ## Options
     * `:into` - destination: `:memory` (default) or `path` / `{:file, path}`
 
