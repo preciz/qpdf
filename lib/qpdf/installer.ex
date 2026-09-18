@@ -199,17 +199,26 @@ defmodule Qpdf.Installer do
   end
 
   @doc """
+  Returns the default qpdf version.
+  """
+  def default_version, do: @default_version
+
+  @doc """
   Returns the directory where the qpdf native files are stored.
   Uses `_build/qpdf-<version>` when running under Mix to keep `priv/` in the source repository clean,
-  and falls back to `priv/native` in releases.
+  and falls back to `priv/native` in releases for the default version.
   """
   def storage_dir(version \\ nil) do
     v = version || version()
 
-    if is_pid(Process.whereis(Mix.ProjectStack)) and Code.ensure_loaded?(Mix.Project) do
+    if running_under_mix?() do
       Path.join(Path.dirname(Mix.Project.build_path()), "qpdf-#{v}")
     else
-      Path.join(priv_dir(), "native")
+      if v == @default_version do
+        Path.join(priv_dir(), "native")
+      else
+        Path.join([priv_dir(), "native", "qpdf-#{v}"])
+      end
     end
   end
 
@@ -217,13 +226,29 @@ defmodule Qpdf.Installer do
   Returns the expected path to the AppRun executable.
   """
   def app_run_path(version \\ nil) do
-    default_path = Path.join(storage_dir(version), "AppRun")
+    v = version || version()
+    default_path = Path.join(storage_dir(v), "AppRun")
     priv_path = Path.join([priv_dir(), "native", "AppRun"])
 
     cond do
-      File.exists?(default_path) -> default_path
-      File.exists?(priv_path) -> priv_path
-      true -> default_path
+      File.exists?(default_path) ->
+        default_path
+
+      v == @default_version and File.exists?(priv_path) ->
+        priv_path
+
+      true ->
+        default_path
+    end
+  end
+
+  defp running_under_mix? do
+    case Application.get_env(:qpdf, :test_mix_mode) do
+      val when is_boolean(val) ->
+        val
+
+      _ ->
+        is_pid(Process.whereis(Mix.ProjectStack)) and Code.ensure_loaded?(Mix.Project)
     end
   end
 

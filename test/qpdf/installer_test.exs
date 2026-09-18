@@ -25,6 +25,48 @@ defmodule Qpdf.InstallerTest do
     assert Installer.app_run_path() =~ "AppRun"
   end
 
+  test "app_run_path/1 only falls back to priv/native for default version" do
+    priv_apprun = Path.join([Installer.priv_dir(), "native", "AppRun"])
+    File.mkdir_p!(Path.dirname(priv_apprun))
+    File.touch!(priv_apprun)
+
+    try do
+      # Non-default version should not fall back to priv/native/AppRun
+      non_default_path = Installer.app_run_path("12.2.0")
+      assert non_default_path =~ "qpdf-12.2.0"
+      refute non_default_path == priv_apprun
+
+      # Default version falls back to priv/native/AppRun when _build executable does not exist
+      default_ver = Installer.default_version()
+      build_default = Path.join(Installer.storage_dir(default_ver), "AppRun")
+
+      if not File.exists?(build_default) do
+        assert Installer.app_run_path(default_ver) == priv_apprun
+        assert Installer.app_run_path() == priv_apprun
+      end
+    after
+      File.rm(priv_apprun)
+    end
+  end
+
+  test "storage_dir/1 and app_run_path/1 in release mode preserve non-default version" do
+    Application.put_env(:qpdf, :test_mix_mode, false)
+
+    try do
+      default_ver = Installer.default_version()
+      # Default version falls back to priv/native
+      assert Installer.storage_dir(default_ver) == Path.join(Installer.priv_dir(), "native")
+
+      # Non-default version uses versioned path in priv/native
+      custom_dir = Installer.storage_dir("12.2.0")
+      assert custom_dir == Path.join([Installer.priv_dir(), "native", "qpdf-12.2.0"])
+
+      assert Installer.app_run_path("12.2.0") == Path.join(custom_dir, "AppRun")
+    after
+      Application.delete_env(:qpdf, :test_mix_mode)
+    end
+  end
+
   test "priv_dir/0 returns priv path" do
     assert is_binary(Installer.priv_dir())
   end
