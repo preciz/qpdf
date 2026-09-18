@@ -95,46 +95,51 @@ defmodule Qpdf.CLI do
   def run_stdout(args) do
     case System.find_executable("sh") do
       sh when is_binary(sh) ->
-        Qpdf.Temp.with_tmp_dir(fn dir ->
-          stderr_file = Path.join(dir, "stderr.txt")
-
-          case System.cmd(sh, ["-c", ~s(exec "$@" 2> "$0"), stderr_file, executable() | args]) do
-            {stdout, 0} ->
-              {stdout, 0}
-
-            {_stdout, code} ->
-              stderr_output = if File.exists?(stderr_file), do: File.read!(stderr_file), else: ""
-              {stderr_output, code}
-          end
-        end)
+        run_stdout_with_sh(sh, args)
 
       nil ->
         run(args, stderr_to_stdout: false)
     end
   end
 
-  defp execute_into_memory(args_before_out) do
-    Qpdf.Temp.with_tmp_dir(fn staging_dir ->
-      staged_target = Path.join(staging_dir, "staged_output.pdf")
+  defp run_stdout_with_sh(sh, args) do
+    Qpdf.Temp.with_tmp_dir(fn dir ->
+      stderr_file = Path.join(dir, "stderr.txt")
 
-      case run(args_before_out ++ ["--", staged_target]) do
-        {_output, 0} ->
-          {:ok, File.read!(staged_target)}
+      case System.cmd(sh, ["-c", ~s(exec "$@" 2> "$0"), stderr_file, executable() | args]) do
+        {stdout, 0} ->
+          {stdout, 0}
 
-        other ->
-          {:error, other}
+        {_stdout, code} ->
+          {read_stderr_file(stderr_file), code}
       end
     end)
   end
 
+  defp read_stderr_file(file) do
+    if File.exists?(file), do: File.read!(file), else: ""
+  end
+
+  defp execute_into_memory(args_before_out) do
+    execute_staged(args_before_out, fn staged_target ->
+      {:ok, File.read!(staged_target)}
+    end)
+  end
+
   defp execute_into_file(args_before_out, dest_path) do
+    execute_staged(args_before_out, fn staged_target ->
+      Qpdf.Temp.move_file!(staged_target, dest_path)
+      {:ok, dest_path}
+    end)
+  end
+
+  defp execute_staged(args_before_out, on_success) do
     Qpdf.Temp.with_tmp_dir(fn staging_dir ->
       staged_target = Path.join(staging_dir, "staged_output.pdf")
 
       case run(args_before_out ++ ["--", staged_target]) do
         {_output, 0} ->
-          Qpdf.Temp.move_file!(staged_target, dest_path)
-          {:ok, dest_path}
+          on_success.(staged_target)
 
         other ->
           {:error, other}
