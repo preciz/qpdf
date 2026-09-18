@@ -32,7 +32,7 @@ defmodule Qpdf.Attachments do
           {:ok, binary() | Path.t()} | {:error, any()}
   def extract(input, key, opts \\ []) when is_binary(key) do
     Temp.with_input_path(input, fn in_file ->
-      case CLI.run(["--no-warn", "--warning-exit-0", "--show-attachment=#{key}", in_file]) do
+      case CLI.run_stdout(["--no-warn", "--warning-exit-0", "--show-attachment=#{key}", in_file]) do
         {output, 0} ->
           CLI.deliver_output(output, opts)
 

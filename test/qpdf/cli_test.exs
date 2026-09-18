@@ -90,9 +90,93 @@ defmodule Qpdf.CLITest do
     end
   end
 
+  describe "run_stdout/1" do
+    test "captures stdout without stderr mixing" do
+      sh = System.find_executable("sh")
+
+      if sh do
+        script_dir = System.tmp_dir!()
+        token = Base.encode16(:crypto.strong_rand_bytes(4))
+        mock_bin = Path.join(script_dir, "mock_qpdf_#{token}.sh")
+
+        File.write!(mock_bin, """
+        #!/bin/sh
+        if [ "$1" = "fail" ]; then
+          echo "something went wrong" >&2
+          exit 1
+        fi
+        echo "ATTACHMENT_DATA"
+        echo "WARNING: non-fatal warning" >&2
+        exit 0
+        """)
+
+        File.chmod!(mock_bin, 0o755)
+
+        orig = Application.get_env(:qpdf, :executable_path)
+
+        try do
+          Application.put_env(:qpdf, :executable_path, mock_bin)
+
+          assert {stdout, 0} = CLI.run_stdout(["ok"])
+          assert String.trim(stdout) == "ATTACHMENT_DATA"
+          refute stdout =~ "WARNING"
+
+          assert {stderr, 1} = CLI.run_stdout(["fail"])
+          assert stderr =~ "something went wrong"
+        after
+          File.rm(mock_bin)
+
+          if orig do
+            Application.put_env(:qpdf, :executable_path, orig)
+          else
+            Application.delete_env(:qpdf, :executable_path)
+          end
+        end
+      end
+    end
+  end
+
   describe "run_into/2" do
     test "returns error for invalid output destination before running" do
       assert {:error, :invalid_destination} = CLI.run_into(["--version"], into: :bad)
+    end
+
+    test "does not mix stderr into output binary when writing into: :memory" do
+      sh = System.find_executable("sh")
+
+      if sh do
+        script_dir = System.tmp_dir!()
+        token = Base.encode16(:crypto.strong_rand_bytes(4))
+        mock_bin = Path.join(script_dir, "mock_qpdf_into_#{token}.sh")
+
+        File.write!(mock_bin, """
+        #!/bin/sh
+        for last; do true; done
+        echo "%PDF-1.4 mock content" > "$last"
+        echo "WARNING: non-fatal stderr warning" >&2
+        exit 0
+        """)
+
+        File.chmod!(mock_bin, 0o755)
+
+        orig = Application.get_env(:qpdf, :executable_path)
+
+        try do
+          Application.put_env(:qpdf, :executable_path, mock_bin)
+
+          assert {:ok, binary} = CLI.run_into(["dummy_arg"], into: :memory)
+          assert binary =~ "%PDF-1.4 mock content"
+          refute binary =~ "WARNING"
+        after
+          File.rm(mock_bin)
+
+          if orig do
+            Application.put_env(:qpdf, :executable_path, orig)
+          else
+            Application.delete_env(:qpdf, :executable_path)
+          end
+        end
+      end
     end
   end
 end

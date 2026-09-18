@@ -87,11 +87,44 @@ defmodule Qpdf.CLI do
     end
   end
 
-  defp execute_into_memory(args_before_out) do
-    case run(args_before_out ++ ["--", "-"]) do
-      {output, 0} -> {:ok, output}
-      other -> {:error, other}
+  @doc """
+  Runs the qpdf command capturing pure standard output without stderr mixing.
+  Any standard error output is captured separately in a staging file and only returned on failure.
+  """
+  @spec run_stdout([String.t()]) :: {binary(), non_neg_integer()}
+  def run_stdout(args) do
+    case System.find_executable("sh") do
+      sh when is_binary(sh) ->
+        Qpdf.Temp.with_tmp_dir(fn dir ->
+          stderr_file = Path.join(dir, "stderr.txt")
+
+          case System.cmd(sh, ["-c", ~s(exec "$@" 2> "$0"), stderr_file, executable() | args]) do
+            {stdout, 0} ->
+              {stdout, 0}
+
+            {_stdout, code} ->
+              stderr_output = if File.exists?(stderr_file), do: File.read!(stderr_file), else: ""
+              {stderr_output, code}
+          end
+        end)
+
+      nil ->
+        run(args, stderr_to_stdout: false)
     end
+  end
+
+  defp execute_into_memory(args_before_out) do
+    Qpdf.Temp.with_tmp_dir(fn staging_dir ->
+      staged_target = Path.join(staging_dir, "staged_output.pdf")
+
+      case run(args_before_out ++ ["--", staged_target]) do
+        {_output, 0} ->
+          {:ok, File.read!(staged_target)}
+
+        other ->
+          {:error, other}
+      end
+    end)
   end
 
   defp execute_into_file(args_before_out, dest_path) do
