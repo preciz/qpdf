@@ -25,7 +25,7 @@ Add `:qpdf` to your list of dependencies in `mix.exs`:
 ```elixir
 def deps do
   [
-    {:qpdf, "~> 0.1.0"}
+    {:qpdf, "~> 0.1.1"}
   ]
 end
 ```
